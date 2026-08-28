@@ -1,0 +1,606 @@
+/* ---------------------------------------------------------------------
+   Tokens de color. Paleta categórica y tokens de superficie/tinta según
+   la guía de dataviz del proyecto (8 tonos con orden fijo, validados para
+   contraste y para daltonismo). Los procesos se pintan siempre con el
+   mismo tono según su orden de creación (ver js/ui/grilla-gantt.js).
+--------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --superficie: #fcfcfb;
+  --plano-pagina: #f9f9f7;
+  --tinta-primaria: #0b0b0b;
+  --tinta-secundaria: #52514e;
+  --tinta-muted: #898781;
+  --linea-sutil: #e1e0d9;
+  --linea-base: #c3c2b7;
+  --borde: rgba(11, 11, 11, 0.1);
+
+  --color-exito: #006300;
+  --color-error: #d03b3b;
+
+  --proceso-color-1: #2a78d6;
+  --proceso-color-2: #eb6834;
+  --proceso-color-3: #1baf7a;
+  --proceso-color-4: #eda100;
+  --proceso-color-5: #e87ba4;
+  --proceso-color-6: #008300;
+  --proceso-color-7: #4a3aa7;
+  --proceso-color-8: #e34948;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --superficie: #1a1a19;
+    --plano-pagina: #0d0d0d;
+    --tinta-primaria: #ffffff;
+    --tinta-secundaria: #c3c2b7;
+    --tinta-muted: #898781;
+    --linea-sutil: #2c2c2a;
+    --linea-base: #383835;
+    --borde: rgba(255, 255, 255, 0.1);
+
+    --color-exito: #0ca30c;
+    --color-error: #e66767;
+
+    --proceso-color-1: #3987e5;
+    --proceso-color-2: #d95926;
+    --proceso-color-3: #199e70;
+    --proceso-color-4: #c98500;
+    --proceso-color-5: #d55181;
+    --proceso-color-6: #008300;
+    --proceso-color-7: #9085e9;
+    --proceso-color-8: #e66767;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--plano-pagina);
+  color: var(--tinta-primaria);
+}
+
+h1, h2, h3 {
+  font-weight: 600;
+}
+
+button {
+  font-family: inherit;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--linea-base);
+  background: var(--superficie);
+  color: var(--tinta-primaria);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--tinta-secundaria);
+}
+
+input, select {
+  font-family: inherit;
+  font-size: 0.9rem;
+  border: 1px solid var(--linea-base);
+  border-radius: 4px;
+  padding: 0.25rem 0.4rem;
+  background: var(--superficie);
+  color: var(--tinta-primaria);
+}
+
+/* ---------------------------------------------------------------------
+   Layout general
+--------------------------------------------------------------------- */
+.encabezado-app {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--linea-sutil);
+}
+
+.acciones-globales {
+  display: flex;
+  gap: 0.5rem;
+}
+
+main {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.seccion-procesos, .seccion-tu-solucion, .seccion-algoritmos {
+  background: var(--superficie);
+  border: 1px solid var(--linea-sutil);
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+
+.explicacion-seccion {
+  color: var(--tinta-secundaria);
+  font-size: 0.85rem;
+  margin-top: -0.25rem;
+}
+
+.encabezado-seccion-bloques {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+/* ---------------------------------------------------------------------
+   Tabla de procesos
+--------------------------------------------------------------------- */
+.tabla-procesos {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.75rem;
+}
+
+.tabla-procesos th, .tabla-procesos td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--linea-sutil);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.tabla-procesos th {
+  color: var(--tinta-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.input-id-proceso {
+  width: 5rem;
+  font-weight: 600;
+}
+
+.input-numero {
+  width: 4.5rem;
+}
+
+.encabezado-rafaga.encabezado-cpu {
+  background: color-mix(in srgb, var(--proceso-color-1) 10%, transparent);
+}
+
+.encabezado-rafaga.encabezado-io {
+  background: color-mix(in srgb, var(--tinta-muted) 12%, transparent);
+}
+
+.celda-rafaga {
+  white-space: nowrap;
+}
+
+.celda-rafaga.celda-cpu {
+  background: color-mix(in srgb, var(--proceso-color-1) 6%, transparent);
+}
+
+.celda-rafaga.celda-io {
+  background: color-mix(in srgb, var(--tinta-muted) 8%, transparent);
+}
+
+.celda-rafaga-vacia {
+  background: transparent;
+}
+
+.input-duracion-rafaga {
+  width: 3.5rem;
+  padding: 0.2rem 0.35rem;
+}
+
+.boton-quitar-rafaga {
+  border: none;
+  background: transparent;
+  color: var(--color-error);
+  cursor: pointer;
+  padding: 0 0.15rem;
+  font-size: 0.9rem;
+}
+
+.boton-agregar-rafaga, .boton-agregar-proceso, .boton-agregar-cola {
+  font-size: 0.8rem;
+}
+
+.boton-eliminar-proceso {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+/* ---------------------------------------------------------------------
+   Bloques de algoritmo
+--------------------------------------------------------------------- */
+.bloque-algoritmo {
+  border: 1px solid var(--linea-sutil);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.header-bloque {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.select-algoritmo {
+  font-weight: 600;
+}
+
+.parametros-bloque {
+  display: flex;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.campo-parametro {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--tinta-secundaria);
+}
+
+.campo-parametro input[type="number"] {
+  width: 4rem;
+}
+
+.campo-parametro input[type="checkbox"] {
+  width: auto;
+  cursor: pointer;
+}
+
+.boton-eliminar-bloque {
+  margin-left: auto;
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.celda-extra-grilla {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--superficie);
+  border-radius: 3px;
+}
+
+.celda-extra-grilla input {
+  width: 3rem;
+  padding: 0.15rem;
+  text-align: center;
+}
+
+.etiqueta-columna-extra {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  color: var(--tinta-muted);
+}
+
+.area-acciones {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.mensaje-resultado {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mensaje-correcto {
+  color: var(--color-exito);
+}
+
+.mensaje-incorrecto {
+  color: var(--color-error);
+}
+
+.area-metricas {
+  margin-top: 1rem;
+}
+
+/* ---------------------------------------------------------------------
+   Grilla de Gantt (swimlane: una fila por proceso, una columna por instante)
+--------------------------------------------------------------------- */
+.grilla-swimlane {
+  display: grid;
+  gap: 2px;
+  overflow-x: auto;
+  margin-bottom: 0.5rem;
+  background: var(--linea-sutil);
+  border: 1px solid var(--linea-sutil);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.etiqueta-proceso {
+  display: flex;
+  align-items: center;
+  padding: 0 0.5rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  background: var(--superficie);
+  border-radius: 3px;
+}
+
+.celda-proceso {
+  position: relative;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: white;
+  border-radius: 3px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.celda-proceso.celda-vacia {
+  background: var(--superficie);
+  color: var(--tinta-muted);
+}
+
+.celda-proceso.celda-cpu {
+  cursor: pointer;
+}
+
+.celda-proceso.celda-io {
+  background: var(--tinta-secundaria);
+  cursor: pointer;
+}
+
+/* Las celdas de la grilla de solución no son clicleables, así que no
+   deberían mostrar cursor de interacción — la grilla del alumno sí lo hace,
+   por eso el cursor se define en .celda-cpu/.celda-io y no acá. */
+.area-grilla-solucion .celda-proceso {
+  cursor: default;
+}
+
+.celda-proceso.celda-incorrecta {
+  outline: 2px solid var(--color-error);
+  outline-offset: -2px;
+}
+
+/* Marcadores de transición en la última celda de un tramo de CPU (ver
+   ui/grilla-gantt.js, construirMarcadoresTransicion): explican por qué el
+   proceso dejó la CPU justo ahí. Solo aparecen en grillas de solución. */
+.celda-proceso.celda-terminada {
+  border-right: 3px solid var(--color-error);
+}
+
+/* El puntito (desalojado) y la crucecita (IO) van en la MISMA posición —
+   el borde derecho, centrado verticalmente — así que comparten el
+   posicionamiento acá y solo difieren en su estilo propio abajo. Con
+   z-index alto para que no queden tapados por celdas vecinas. */
+.marcador-transicion {
+  position: absolute;
+  top: 50%;
+  right: -1px;
+  transform: translate(50%, -50%);
+  z-index: 5;
+  pointer-events: none;
+}
+
+.marcador-desalojado {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.marcador-io {
+  font-size: 0.85rem;
+  font-weight: 900;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.6);
+}
+
+.fila-eje-instantes {
+  position: relative;
+  height: 20px;
+}
+
+.marca-instante {
+  position: absolute;
+  top: 2px;
+  font-size: 0.7rem;
+  color: var(--tinta-muted);
+}
+
+.etiqueta-cola-listos {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.7rem;
+  color: var(--tinta-secundaria);
+  background: var(--superficie);
+  border-radius: 3px;
+}
+
+.celda-cola-listos {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  padding: 0.2rem;
+  min-height: 30px;
+  font-size: 0.68rem;
+  color: var(--tinta-secundaria);
+  background: var(--superficie);
+  border: 1px dashed var(--linea-sutil);
+  border-radius: 3px;
+}
+
+.item-con-tooltip {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.proceso-color-1 { background: var(--proceso-color-1); }
+.proceso-color-2 { background: var(--proceso-color-2); }
+.proceso-color-3 { background: var(--proceso-color-3); }
+.proceso-color-4 { background: var(--proceso-color-4); }
+.proceso-color-5 { background: var(--proceso-color-5); }
+.proceso-color-6 { background: var(--proceso-color-6); }
+.proceso-color-7 { background: var(--proceso-color-7); }
+.proceso-color-8 { background: var(--proceso-color-8); }
+
+/* ---------------------------------------------------------------------
+   Tabla de métricas
+--------------------------------------------------------------------- */
+.tabla-metricas {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.tabla-metricas th, .tabla-metricas td {
+  padding: 0.3rem 0.7rem;
+  border-bottom: 1px solid var(--linea-sutil);
+  text-align: center;
+}
+
+.fila-promedio {
+  font-weight: 700;
+  border-top: 2px solid var(--linea-base);
+}
+
+/* ---------------------------------------------------------------------
+   Multinivel
+--------------------------------------------------------------------- */
+.aviso-multinivel {
+  color: var(--tinta-secundaria);
+  font-size: 0.85rem;
+  margin-top: 0;
+}
+
+.celda-cola-editable {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  border-style: solid;
+  gap: 0.2rem;
+}
+
+.lista-cola-instante {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 1.5rem;
+}
+
+.chip-cola-instante {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: color-mix(in srgb, var(--proceso-color-1) 15%, var(--superficie));
+  border-radius: 999px;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.75rem;
+  cursor: grab;
+}
+
+.chip-cola-instante:active {
+  cursor: grabbing;
+}
+
+.chip-cola-instante.arrastrando {
+  opacity: 0.4;
+}
+
+.etiqueta-chip-cola {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+}
+
+.boton-reordenar-cola, .boton-quitar-cola {
+  border: none;
+  background: transparent;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  font-size: 0.65rem;
+  color: var(--tinta-secundaria);
+}
+
+.boton-reordenar-cola:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.boton-quitar-cola {
+  color: var(--color-error);
+  font-size: 0.8rem;
+}
+
+.select-agregar-cola-instante {
+  font-size: 0.7rem;
+  padding: 0.15rem;
+}
+
+.boton-agregar-instante {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* ---------------------------------------------------------------------
+   Tooltips (Tippy.js) — tema "simulador" para las fórmulas de estimación
+   de SJF/SRTF/HRRN en la fila "Listos" (ver ui/grilla-gantt.js).
+--------------------------------------------------------------------- */
+/* Colores fijos (no las variables de tema): el tooltip es una burbuja
+   oscura siempre, en modo claro Y en modo oscuro — si usara los tokens de
+   tema, se invertiría en dark mode y quedaría una burbuja clara sobre
+   fondo oscuro, inconsistente con el resto de la página. */
+.tippy-box[data-theme~="simulador"] {
+  background: #262624;
+  color: #f2f1ed;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  border-radius: 6px;
+}
+
+.tippy-box[data-theme~="simulador"] .tippy-content {
+  padding: 0.5rem 0.6rem;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.tippy-box[data-theme~="simulador"][data-placement^="top"] > .tippy-arrow::before {
+  border-top-color: #262624;
+}
+
+.tippy-box[data-theme~="simulador"][data-placement^="bottom"] > .tippy-arrow::before {
+  border-bottom-color: #262624;
+}
+
+.tooltip-formula-simbolica {
+  color: #b3b1a9;
+}
+
+.tooltip-formula-sustituida {
+  color: #f2f1ed;
+  font-weight: 600;
+  margin-top: 0.1rem;
+}

@@ -1,0 +1,719 @@
+/**
+ * grilla-gantt.js — Grilla de Gantt tipo "swimlane": una fila por proceso,
+ * una columna por instante de tiempo. Cada celda tiene 3 estados posibles:
+ * vacía (nada), "CPU" (el proceso está ejecutando) o "IO" (el proceso está
+ * haciendo entrada/salida). Se usa tanto para que el alumno complete su
+ * respuesta a mano como para mostrar la solución de referencia.
+ *
+ * Reglas de exclusión mutua (una sola CPU, un solo dispositivo de IO):
+ * en una misma columna (mismo instante), a lo sumo UNA celda puede estar en
+ * "CPU" y a lo sumo UNA puede estar en "IO" — pero sí pueden coexistir un
+ * proceso en CPU y otro distinto en IO al mismo tiempo. Al marcar una celda
+ * como CPU (o IO), cualquier otra celda de esa misma columna que ya tuviera
+ * ese mismo estado se libera automáticamente.
+ *
+ * Interacción: cada click sobre una celda avanza un paso en el ciclo
+ * vacío → CPU → IO → vacío → … Todos los clicks se tratan igual (no hay
+ * click simple vs. doble click).
+ *
+ * La grilla del alumno (no la solución, que es de solo lectura y de
+ * duración fija) además permite agregar columnas: el ejercicio puede
+ * necesitar más instantes de los que el alumno anticipó al empezar.
+ *
+ * Esa misma grilla del alumno tiene, debajo del eje de instantes, una fila
+ * más: la cola de listos armada a mano. Por cada instante el alumno puede
+ * agregar procesos y reordenarlos (con flechas ▲▼, o arrastrando un chip a
+ * otra posición — incluso a la columna de OTRO instante) — es un espacio de
+ * organización libre, análogo a la fila de solo lectura que se ve debajo de
+ * las soluciones de los algoritmos, pero editable.
+ */
+const GrillaGantt = (function () {
+  "use strict";
+
+  const CANTIDAD_COLORES = 8;
+  const ORDEN_ESTADOS = ["", "CPU", "IO"];
+  const ANCHO_COLUMNA_ETIQUETA = "88px";
+  const ANCHO_COLUMNA_EXTRA = "56px";
+  const ANCHO_MINIMO_COLUMNA = "38px";
+
+  /** Asigna a cada proceso una clase de color estable, en orden de creación. */
+  function asignarColoresProcesos(procesos) {
+    const colores = {};
+    procesos.forEach((p, indice) => {
+      colores[p.id] = `proceso-color-${(indice % CANTIDAD_COLORES) + 1}`;
+    });
+    return colores;
+  }
+
+  /**
+   * Reconstruye, para cada proceso, un array con su estado ("CPU" | "IO" |
+   * null) en cada instante, a partir de lo que devuelve un algoritmo
+   * (`gantt` para los tramos de CPU, `franjasIO` para los de IO).
+   */
+  function construirDatosPorProceso(procesos, resultado) {
+    const finesGantt = resultado.gantt.map((b) => b.fin);
+    const finesIO = (resultado.franjasIO || []).map((f) => f.fin);
+    const duracionTotal = Math.max(0, ...finesGantt, ...finesIO);
+
+    const datos = {};
+    procesos.forEach((p) => {
+      datos[p.id] = new Array(duracionTotal).fill(null);
+    });
+
+    resultado.gantt.forEach((bloque) => {
+      if (bloque.tipo !== "CPU") return;
+      for (let t = bloque.inicio; t < bloque.fin; t++) datos[bloque.proceso][t] = "CPU";
+    });
+    (resultado.franjasIO || []).forEach((franja) => {
+      for (let t = franja.inicio; t < franja.fin; t++) datos[franja.proceso][t] = "IO";
+    });
+
+    return { datos, duracionTotal };
+  }
+
+  /**
+   * Para cada tramo de CPU consolidado, decide CÓMO terminó y guarda esa
+   * razón en la ÚLTIMA celda de ese tramo (solo se usa en las grillas de
+   * solución, de solo lectura — mostrarlo en la del alumno le regalaría la
+   * respuesta). Las tres razones son mutuamente excluyentes y agotan todos
+   * los casos posibles en los que un tramo de CPU puede terminar:
+   *
+   *   - "terminado": esa ráfaga era la última del proceso (deriva del
+   *     instante de retorno en `resultado.metricas`).
+   *   - "io": inmediatamente después arranca una ráfaga de IO (hay una
+   *     franja en `resultado.franjasIO` que empieza justo ahí).
+   *   - "desalojado": ninguna de las dos anteriores — el proceso todavía
+   *     tenía ráfaga por delante y perdió la CPU sin haber terminado (por
+   *     quantum, o porque otro proceso lo desplazó).
+   */
+  function construirMarcadoresTransicion(procesos, resultado) {
+    const marcadores = {};
+    procesos.forEach((p) => (marcadores[p.id] = {}));
+
+    const instanteTerminacion = {};
+    procesos.forEach((p) => {
+      const metrica = resultado.metricas[p.id];
+      if (metrica) instanteTerminacion[p.id] = p.arribo + metrica.retorno;
+    });
+
+    const iniciosDeIOPorProceso = {};
+    (resultado.franjasIO || []).forEach((franja) => {
+      if (!iniciosDeIOPorProceso[franja.proceso]) iniciosDeIOPorProceso[franja.proceso] = new Set();
+      iniciosDeIOPorProceso[franja.proceso].add(franja.inicio);
+    });
+
+    resultado.gantt.forEach((bloque) => {
+      if (bloque.tipo !== "CPU") return;
+      let razon;
+      if (instanteTerminacion[bloque.proceso] === bloque.fin) razon = "terminado";
+      else if (iniciosDeIOPorProceso[bloque.proceso] && iniciosDeIOPorProceso[bloque.proceso].has(bloque.fin)) razon = "io";
+      else razon = "desalojado";
+      marcadores[bloque.proceso][bloque.fin - 1] = razon;
+    });
+
+    return marcadores;
+  }
+
+  /**
+   * Dibuja en `celda` la marca visual correspondiente a cómo terminó ese
+   * tramo de CPU (ver `construirMarcadoresTransicion`):
+   *   - "terminado": bordecito rojo alrededor de la celda.
+   *   - "io": crucecita sobre el borde derecho.
+   *   - "desalojado": puntito (por quantum o porque lo desplazó otro proceso).
+   */
+  function aplicarMarcadorTransicion(celda, razon) {
+    if (razon === "terminado") {
+      celda.classList.add("celda-terminada");
+      return;
+    }
+    const marca = document.createElement("span");
+    if (razon === "io") {
+      marca.className = "marcador-transicion marcador-io";
+      marca.textContent = "×";
+    } else {
+      marca.className = "marcador-transicion marcador-desalojado";
+    }
+    celda.appendChild(marca);
+  }
+
+  function aplicarEstadoCelda(celda, estado, coloresProcesos) {
+    celda.classList.remove("celda-vacia", "celda-cpu", "celda-io");
+    Array.from(celda.classList)
+      .filter((c) => c.startsWith("proceso-color-"))
+      .forEach((c) => celda.classList.remove(c));
+
+    celda.dataset.estado = estado;
+    celda.textContent = estado || "";
+
+    if (estado === "CPU") {
+      celda.classList.add("celda-cpu");
+      if (coloresProcesos) celda.classList.add(coloresProcesos[celda.dataset.proceso]);
+    } else if (estado === "IO") {
+      celda.classList.add("celda-io");
+    } else {
+      celda.classList.add("celda-vacia");
+    }
+  }
+
+  /** Aplica `nuevoEstado` a `celda`, liberando primero cualquier otra celda
+   * de la misma columna que tuviera ese mismo estado (exclusión mutua). */
+  function aplicarEstadoConExclusion(celda, nuevoEstado, celdasDeLaColumna, coloresProcesos) {
+    if (nuevoEstado === "CPU" || nuevoEstado === "IO") {
+      celdasDeLaColumna.forEach((otra) => {
+        if (otra !== celda && otra.dataset.estado === nuevoEstado) aplicarEstadoCelda(otra, "", coloresProcesos);
+      });
+    }
+    aplicarEstadoCelda(celda, nuevoEstado, coloresProcesos);
+  }
+
+  function habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos) {
+    celda.addEventListener("click", () => {
+      const indiceActual = ORDEN_ESTADOS.indexOf(celda.dataset.estado || "");
+      const nuevoEstado = ORDEN_ESTADOS[(indiceActual + 1) % ORDEN_ESTADOS.length];
+      aplicarEstadoConExclusion(celda, nuevoEstado, celdasDeLaColumna, coloresProcesos);
+    });
+  }
+
+  /**
+   * Construye la grilla swimlane completa: una fila por proceso + una fila
+   * final con el eje de instantes, cuyos números quedan sobre las líneas
+   * divisorias de columna (no centrados en la celda).
+   *
+   * Todas las celdas se ubican con `grid-row`/`grid-column` explícitos (en
+   * vez de dejar que el orden del DOM las acomode solas) para poder agregar
+   * columnas nuevas después sin tener que reconstruir toda la grilla.
+   */
+  function crearGrillaSwimlane(contenedor, opciones) {
+    const {
+      procesos,
+      duracionInicial,
+      editable,
+      datosPorProceso,
+      coloresProcesos,
+      columnaExtra,
+      tooltipsPorProceso,
+      marcadoresPorProceso,
+    } = opciones;
+    contenedor.innerHTML = "";
+
+    if (duracionInicial <= 0 || procesos.length === 0) return null;
+
+    const grilla = document.createElement("div");
+    grilla.className = "grilla-swimlane";
+
+    // Si hay una columna extra (ej. la estimación inicial de HRRN), va
+    // pegada a la etiqueta del proceso, y todo lo demás (instantes, eje,
+    // cola) se corre una columna a la derecha.
+    const offsetColumnas = columnaExtra ? 1 : 0;
+    const columnaInicioInstantes = 2 + offsetColumnas;
+
+    let duracionActual = 0;
+    const celdasPorInstante = [];
+    const celdasPorProceso = {};
+    procesos.forEach((p) => (celdasPorProceso[p.id] = []));
+
+    procesos.forEach((proceso, indiceProceso) => {
+      const etiqueta = document.createElement("div");
+      etiqueta.className = "etiqueta-proceso";
+      etiqueta.textContent = proceso.id;
+      etiqueta.style.gridRow = String(indiceProceso + 1);
+      etiqueta.style.gridColumn = "1";
+      grilla.appendChild(etiqueta);
+
+      if (columnaExtra) {
+        const celdaExtra = document.createElement("div");
+        celdaExtra.className = "celda-extra-grilla";
+        celdaExtra.style.gridRow = String(indiceProceso + 1);
+        celdaExtra.style.gridColumn = "2";
+
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "1";
+        input.value = columnaExtra.obtenerValor(proceso.id);
+        input.addEventListener("change", () => {
+          columnaExtra.onCambio(proceso.id, Number(input.value) || 0);
+        });
+        celdaExtra.appendChild(input);
+        grilla.appendChild(celdaExtra);
+      }
+    });
+
+    // La fila de "cola armada a mano" solo existe en la grilla editable —
+    // es donde vive el editor de colas por instante (ver más abajo).
+    const filaCola = procesos.length + 2;
+    const colaPorInstante = [];
+    const celdasColaPorInstante = [];
+
+    if (editable) {
+      const etiquetaCola = document.createElement("div");
+      etiquetaCola.className = "etiqueta-cola-listos";
+      etiquetaCola.textContent = "Cola";
+      etiquetaCola.style.gridRow = String(filaCola);
+      etiquetaCola.style.gridColumn = "1";
+      grilla.appendChild(etiquetaCola);
+    }
+
+    /**
+     * Mueve una entrada de la cola de un instante a otro (o la reordena
+     * dentro del mismo instante), sea por drag&drop o por los botones ▲▼.
+     * Si el proceso ya está en la cola destino, no hace nada (no tiene
+     * sentido que un mismo proceso aparezca dos veces en la misma cola).
+     */
+    function moverEntradaCola(instanteOrigen, indiceOrigen, instanteDestino, indiceDestinoDeseado) {
+      const colaOrigen = colaPorInstante[instanteOrigen];
+      const colaDestino = colaPorInstante[instanteDestino];
+      const [procesoId] = colaOrigen.splice(indiceOrigen, 1);
+
+      if (colaDestino.includes(procesoId)) {
+        colaOrigen.splice(indiceOrigen, 0, procesoId); // deshacer: ya estaba en destino
+        return;
+      }
+
+      let destino = indiceDestinoDeseado;
+      if (instanteOrigen === instanteDestino && indiceOrigen < destino) destino -= 1;
+      destino = Math.max(0, Math.min(destino, colaDestino.length));
+      colaDestino.splice(destino, 0, procesoId);
+
+      renderizarCeldaCola(instanteOrigen);
+      if (instanteDestino !== instanteOrigen) renderizarCeldaCola(instanteDestino);
+    }
+
+    function renderizarCeldaCola(t) {
+      const celda = celdasColaPorInstante[t];
+      celda.innerHTML = "";
+
+      const lista = document.createElement("div");
+      lista.className = "lista-cola-instante";
+      lista.addEventListener("dragover", (ev) => ev.preventDefault());
+      lista.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
+        moverEntradaCola(datos.instante, datos.indice, t, colaPorInstante[t].length);
+      });
+
+      colaPorInstante[t].forEach((procesoId, indice) => {
+        const chip = document.createElement("div");
+        chip.className = "chip-cola-instante";
+        if (coloresProcesos && coloresProcesos[procesoId]) {
+          chip.style.background = `color-mix(in srgb, var(--${coloresProcesos[procesoId]}) 20%, var(--superficie))`;
+        }
+        chip.draggable = true;
+        chip.addEventListener("dragstart", (ev) => {
+          ev.dataTransfer.effectAllowed = "move";
+          ev.dataTransfer.setData("text/plain", JSON.stringify({ instante: t, indice }));
+          chip.classList.add("arrastrando");
+        });
+        chip.addEventListener("dragend", () => chip.classList.remove("arrastrando"));
+        // Soltar sobre un chip puntual inserta ANTES de ese chip (permite
+        // reordenar con precisión, no solo mandar al final de la lista).
+        chip.addEventListener("dragover", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        });
+        chip.addEventListener("drop", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
+          moverEntradaCola(datos.instante, datos.indice, t, indice);
+        });
+
+        const botonSubir = document.createElement("button");
+        botonSubir.type = "button";
+        botonSubir.className = "boton-reordenar-cola";
+        botonSubir.textContent = "▲";
+        botonSubir.title = "Mover antes en la cola";
+        botonSubir.disabled = indice === 0;
+        botonSubir.addEventListener("click", () => {
+          const cola = colaPorInstante[t];
+          [cola[indice - 1], cola[indice]] = [cola[indice], cola[indice - 1]];
+          renderizarCeldaCola(t);
+        });
+        chip.appendChild(botonSubir);
+
+        const etiquetaChip = document.createElement("span");
+        etiquetaChip.className = "etiqueta-chip-cola";
+        etiquetaChip.textContent = procesoId;
+        chip.appendChild(etiquetaChip);
+
+        const botonBajar = document.createElement("button");
+        botonBajar.type = "button";
+        botonBajar.className = "boton-reordenar-cola";
+        botonBajar.textContent = "▼";
+        botonBajar.title = "Mover después en la cola";
+        botonBajar.disabled = indice === colaPorInstante[t].length - 1;
+        botonBajar.addEventListener("click", () => {
+          const cola = colaPorInstante[t];
+          [cola[indice + 1], cola[indice]] = [cola[indice], cola[indice + 1]];
+          renderizarCeldaCola(t);
+        });
+        chip.appendChild(botonBajar);
+
+        const botonQuitar = document.createElement("button");
+        botonQuitar.type = "button";
+        botonQuitar.className = "boton-quitar-cola";
+        botonQuitar.textContent = "×";
+        botonQuitar.title = "Quitar de la cola";
+        botonQuitar.addEventListener("click", () => {
+          colaPorInstante[t].splice(indice, 1);
+          renderizarCeldaCola(t);
+        });
+        chip.appendChild(botonQuitar);
+
+        lista.appendChild(chip);
+      });
+      celda.appendChild(lista);
+
+      // Un proceso puede aparecer en varios instantes distintos con el
+      // tiempo (vuelve a esperar más de una vez), así que acá solo se
+      // excluye a quien YA está en ESTE instante, no en otros.
+      const disponibles = procesos.map((p) => p.id).filter((id) => !colaPorInstante[t].includes(id));
+      if (disponibles.length > 0) {
+        const select = document.createElement("select");
+        select.className = "select-agregar-cola-instante";
+        const opcionVacia = document.createElement("option");
+        opcionVacia.value = "";
+        opcionVacia.textContent = "+ Agregar…";
+        select.appendChild(opcionVacia);
+        disponibles.forEach((id) => {
+          const opcion = document.createElement("option");
+          opcion.value = id;
+          opcion.textContent = id;
+          select.appendChild(opcion);
+        });
+        select.addEventListener("change", () => {
+          if (select.value) {
+            colaPorInstante[t].push(select.value);
+            renderizarCeldaCola(t);
+          }
+        });
+        celda.appendChild(select);
+      }
+    }
+
+    let eje = null;
+    let etiquetaColumnaExtra = null;
+
+    function actualizarPlantillaColumnas() {
+      const columnaEtiqueta = columnaExtra ? `${ANCHO_COLUMNA_ETIQUETA} ${ANCHO_COLUMNA_EXTRA}` : ANCHO_COLUMNA_ETIQUETA;
+      grilla.style.gridTemplateColumns = `${columnaEtiqueta} repeat(${duracionActual}, minmax(${ANCHO_MINIMO_COLUMNA}, 1fr))`;
+    }
+
+    function reconstruirEje() {
+      if (eje) eje.remove();
+      eje = document.createElement("div");
+      eje.className = "fila-eje-instantes";
+      eje.style.gridRow = String(procesos.length + 1);
+      eje.style.gridColumn = `${columnaInicioInstantes} / span ${duracionActual}`;
+      for (let t = 0; t <= duracionActual; t++) {
+        const marca = document.createElement("span");
+        marca.className = "marca-instante";
+        marca.textContent = t;
+        marca.style.left = `${(t / duracionActual) * 100}%`;
+        if (t === 0) marca.style.transform = "translateX(0)";
+        else if (t === duracionActual) marca.style.transform = "translateX(-100%)";
+        eje.appendChild(marca);
+      }
+      grilla.appendChild(eje);
+
+      // El encabezado de la columna extra vive en la misma fila que el eje
+      // de instantes, para no tener que agregar una fila más solo para eso.
+      if (columnaExtra) {
+        if (etiquetaColumnaExtra) etiquetaColumnaExtra.remove();
+        etiquetaColumnaExtra = document.createElement("div");
+        etiquetaColumnaExtra.className = "etiqueta-columna-extra";
+        etiquetaColumnaExtra.textContent = columnaExtra.encabezado;
+        etiquetaColumnaExtra.style.gridRow = String(procesos.length + 1);
+        etiquetaColumnaExtra.style.gridColumn = "2";
+        grilla.appendChild(etiquetaColumnaExtra);
+      }
+    }
+
+    /** Agrega una columna (instante) nueva al final, dejando el resto de la grilla intacto. */
+    function agregarColumna() {
+      const t = duracionActual;
+      duracionActual += 1;
+      actualizarPlantillaColumnas();
+
+      const celdasDeLaColumna = [];
+      celdasPorInstante.push(celdasDeLaColumna);
+
+      procesos.forEach((proceso, indiceProceso) => {
+        const celda = document.createElement("div");
+        celda.className = "celda-proceso celda-vacia";
+        celda.dataset.estado = "";
+        celda.dataset.proceso = proceso.id;
+        celda.dataset.instante = String(t);
+        celda.style.gridRow = String(indiceProceso + 1);
+        celda.style.gridColumn = String(columnaInicioInstantes + t);
+
+        const valorInicial = datosPorProceso ? datosPorProceso[proceso.id][t] : null;
+        if (valorInicial) aplicarEstadoCelda(celda, valorInicial, coloresProcesos);
+
+        // Solo en grillas de solo lectura: si el algoritmo expone una
+        // "razón" para esta celda de ejecución puntual (hoy solo SRTF, con
+        // el restante estimado que se comparó contra la cola en ESE tick),
+        // se lo mostramos como tooltip al pasar el mouse.
+        const tooltip = tooltipsPorProceso && tooltipsPorProceso[proceso.id] && tooltipsPorProceso[proceso.id][t];
+        if (tooltip) aplicarTooltip(celda, tooltip);
+
+        // También solo en grillas de solo lectura: marca en la ÚLTIMA celda
+        // de cada tramo de CPU por qué terminó (ver construirMarcadoresTransicion).
+        const razonTransicion = marcadoresPorProceso && marcadoresPorProceso[proceso.id] && marcadoresPorProceso[proceso.id][t];
+        if (razonTransicion) aplicarMarcadorTransicion(celda, razonTransicion);
+
+        if (editable) habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos);
+
+        grilla.appendChild(celda);
+        celdasDeLaColumna.push(celda);
+        celdasPorProceso[proceso.id].push(celda);
+      });
+
+      if (editable) {
+        colaPorInstante.push([]);
+        const celdaCola = document.createElement("div");
+        celdaCola.className = "celda-cola-listos celda-cola-editable";
+        celdaCola.style.gridRow = String(filaCola);
+        celdaCola.style.gridColumn = String(columnaInicioInstantes + t);
+        // El drop se acepta en TODA la celda (no solo en la listita interna
+        // de chips): si el instante está vacío, la lista mide casi nada y
+        // la mayor parte del área visible es el <select> de abajo — sin
+        // esto, soltar ahí no movería nada.
+        celdaCola.addEventListener("dragover", (ev) => ev.preventDefault());
+        celdaCola.addEventListener("drop", (ev) => {
+          ev.preventDefault();
+          const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
+          moverEntradaCola(datos.instante, datos.indice, t, colaPorInstante[t].length);
+        });
+        grilla.appendChild(celdaCola);
+        celdasColaPorInstante.push(celdaCola);
+        renderizarCeldaCola(t);
+      }
+
+      reconstruirEje();
+    }
+
+    for (let t = 0; t < duracionInicial; t++) agregarColumna();
+
+    contenedor.appendChild(grilla);
+
+    if (editable) {
+      const botonAgregarInstante = document.createElement("button");
+      botonAgregarInstante.type = "button";
+      botonAgregarInstante.className = "boton-agregar-instante";
+      botonAgregarInstante.textContent = "+ Agregar instante";
+      botonAgregarInstante.addEventListener("click", agregarColumna);
+      contenedor.appendChild(botonAgregarInstante);
+    }
+
+    return {
+      elemento: grilla,
+      obtenerRespuesta: () => {
+        const respuesta = {};
+        procesos.forEach((proceso) => {
+          respuesta[proceso.id] = celdasPorProceso[proceso.id].map((c) => c.dataset.estado || null);
+        });
+        return respuesta;
+      },
+      marcarCelda: (procesoId, instante, clase) => {
+        const celda = celdasPorProceso[procesoId] && celdasPorProceso[procesoId][instante];
+        if (celda) celda.classList.add(clase);
+      },
+      limpiarMarcas: () => {
+        Object.values(celdasPorProceso)
+          .flat()
+          .forEach((c) => c.classList.remove("celda-incorrecta"));
+      },
+      /**
+       * Extiende la grilla (si hace falta) para que tenga al menos
+       * `minimo` columnas, sin tocar lo que el alumno ya completó. La usa
+       * "Tu Solución" para asegurarse de tener espacio suficiente cada vez
+       * que se agrega o recalcula un algoritmo con una solución más larga.
+       */
+      asegurarDuracionMinima: (minimo) => {
+        while (duracionActual < minimo) agregarColumna();
+      },
+    };
+  }
+
+  /** Grilla en blanco para que la complete el alumno (con botón para agregar instantes). */
+  function crearGrillaInteractiva(contenedor, procesos, duracionInicial, coloresProcesos) {
+    return crearGrillaSwimlane(contenedor, {
+      procesos,
+      duracionInicial,
+      editable: true,
+      datosPorProceso: null,
+      coloresProcesos,
+    });
+  }
+
+  function crearCeldaEtiquetaFilaExtra(texto, fila) {
+    const celda = document.createElement("div");
+    celda.className = "etiqueta-cola-listos";
+    celda.textContent = texto;
+    celda.style.gridRow = String(fila);
+    celda.style.gridColumn = "1";
+    return celda;
+  }
+
+  /**
+   * Le agrega a `elemento` un tooltip con Tippy.js
+   * (https://atomiks.github.io/tippyjs/) mostrando `contenidoHTML` (puede
+   * traer varias líneas). Si Tippy no llegó a cargar por algún motivo, cae
+   * de vuelta al `title` nativo del navegador para no perder la
+   * información. La usan tanto las celdas de la cola de listos como las de
+   * ejecución (hoy solo SRTF, para el restante estimado).
+   */
+  function aplicarTooltip(elemento, contenidoHTML) {
+    elemento.classList.add("item-con-tooltip");
+    if (typeof tippy === "function") {
+      tippy(elemento, {
+        content: contenidoHTML,
+        allowHTML: true,
+        theme: "simulador",
+        placement: "top",
+      });
+    } else {
+      elemento.title = contenidoHTML.replace(/<[^>]+>/g, "");
+    }
+  }
+
+  /**
+   * Cada item puede ser un string simple, o { texto, tooltip } cuando el
+   * algoritmo expone la cuenta detrás del orden (SJF/SRTF/HRRN con
+   * estimaciones activadas) — ver `aplicarTooltip`.
+   */
+  function crearCeldaColaListos(items, fila, columna) {
+    const celda = document.createElement("div");
+    celda.className = "celda-cola-listos";
+    celda.style.gridRow = String(fila);
+    celda.style.gridColumn = String(columna);
+    items.forEach((item) => {
+      const linea = document.createElement("div");
+      if (typeof item === "string") {
+        linea.textContent = item;
+      } else {
+        linea.textContent = item.texto;
+        if (item.tooltip) aplicarTooltip(linea, item.tooltip);
+      }
+      celda.appendChild(linea);
+    });
+    return celda;
+  }
+
+  function agregarFilaColaListos(grilla, fila, etiqueta, itemsPorInstante, duracionTotal, columnaInicioInstantes) {
+    grilla.appendChild(crearCeldaEtiquetaFilaExtra(etiqueta, fila));
+    for (let t = 0; t < duracionTotal; t++) {
+      grilla.appendChild(crearCeldaColaListos(itemsPorInstante[t] || [], fila, columnaInicioInstantes + t));
+    }
+  }
+
+  /**
+   * Grilla de solo lectura con la solución de un algoritmo.
+   *
+   * @param {Object} [opciones]
+   * @param {"ninguno"|"simple"|"rrv"} [opciones.modo] - controla si (y cómo)
+   *        se agrega, debajo del eje de instantes, la fila con quién espera
+   *        en la cola de listos en cada instante (el que ejecuta o está en
+   *        IO nunca aparece ahí). "ninguno" no agrega nada (lo usa
+   *        Multinivel, que no tiene solución de referencia); "simple"
+   *        agrega una única fila desde `resultado.colaListosPorInstante`;
+   *        "rrv" agrega dos filas (cola de reingreso con el quantum
+   *        restante entre paréntesis, y cola normal) desde
+   *        `resultado.colasPorInstante`.
+   * @param {Object} [opciones.columnaExtra] - agrega una columna editable
+   *        más entre la etiqueta del proceso y sus celdas de instantes (la
+   *        usan SJF/SRTF/HRRN para la estimación inicial de ráfaga, cuando
+   *        el toggle de estimaciones está activado). Forma:
+   *        `{ encabezado, obtenerValor(procesoId), onCambio(procesoId, valor) }`.
+   * @param {?Function} [opciones.formatearTooltipListos] - (info) => string
+   *        (puede traer HTML). Solo tiene efecto con modo "simple". Si se
+   *        pasa, cada proceso de la fila "Listos" muestra ese contenido en
+   *        un tooltip (Tippy.js) al pasar el mouse, usando
+   *        `resultado.infoListosPorInstante[t][procesoId]` (lo que haya
+   *        capturado `capturarInfoListos` en el algoritmo — hoy lo proveen
+   *        SJF/SRTF/HRRN con estimaciones activadas).
+   * @param {?Function} [opciones.formatearTooltipEjecucion] - (info) => string
+   *        (puede traer HTML). Igual que `formatearTooltipListos`, pero para
+   *        las celdas de CPU: usa `resultado.infoEjecucionPorInstante[t][procesoId]`
+   *        (lo que haya capturado `capturarInfoEjecucion` — hoy solo SRTF,
+   *        para mostrar el restante estimado en ESE instante puntual, que es
+   *        justo lo que el motor compara contra la cola en cada tick).
+   */
+  function renderizarGrillaSolucion(contenedor, procesos, resultado, coloresProcesos, opciones) {
+    const { datos, duracionTotal } = construirDatosPorProceso(procesos, resultado);
+    const columnaExtra = opciones && opciones.columnaExtra;
+
+    const formatearTooltipEjecucion = opciones && opciones.formatearTooltipEjecucion;
+    let tooltipsPorProceso = null;
+    if (formatearTooltipEjecucion && resultado.infoEjecucionPorInstante) {
+      tooltipsPorProceso = {};
+      procesos.forEach((p) => (tooltipsPorProceso[p.id] = new Array(duracionTotal).fill(null)));
+      for (let t = 0; t < duracionTotal; t++) {
+        const infoDelInstante = resultado.infoEjecucionPorInstante[t];
+        if (!infoDelInstante) continue;
+        Object.keys(infoDelInstante).forEach((procesoId) => {
+          tooltipsPorProceso[procesoId][t] = formatearTooltipEjecucion(infoDelInstante[procesoId]);
+        });
+      }
+    }
+
+    // A diferencia de las tooltips/columnaExtra (que dependen de si el
+    // algoritmo usa estimaciones), los marcadores de transición aplican
+    // siempre en toda solución: no hay motivo para ocultarlos.
+    const marcadoresPorProceso = construirMarcadoresTransicion(procesos, resultado);
+
+    const controlador = crearGrillaSwimlane(contenedor, {
+      procesos,
+      duracionInicial: duracionTotal,
+      editable: false,
+      datosPorProceso: datos,
+      coloresProcesos,
+      columnaExtra,
+      tooltipsPorProceso,
+      marcadoresPorProceso,
+    });
+
+    const modo = opciones && opciones.modo;
+    if (!controlador || !modo || modo === "ninguno") return;
+
+    const grilla = controlador.elemento;
+    const filaBase = procesos.length + 2; // fila 1..N = procesos, N+1 = eje de instantes
+    const columnaInicioInstantes = columnaExtra ? 3 : 2;
+
+    if (modo === "simple") {
+      const formatearTooltip = opciones && opciones.formatearTooltipListos;
+      const items = [];
+      for (let t = 0; t < duracionTotal; t++) {
+        const idsListos = resultado.colaListosPorInstante[t] || [];
+        if (formatearTooltip) {
+          items.push(
+            idsListos.map((id) => {
+              const info = resultado.infoListosPorInstante && resultado.infoListosPorInstante[t] && resultado.infoListosPorInstante[t][id];
+              return info ? { texto: id, tooltip: formatearTooltip(info) } : id;
+            })
+          );
+        } else {
+          items.push(idsListos);
+        }
+      }
+      agregarFilaColaListos(grilla, filaBase, "Listos", items, duracionTotal, columnaInicioInstantes);
+    } else if (modo === "rrv") {
+      const itemsReingreso = [];
+      const itemsNormal = [];
+      for (let t = 0; t < duracionTotal; t++) {
+        const colas = (resultado.colasPorInstante && resultado.colasPorInstante[t]) || { reingreso: [], normal: [] };
+        itemsReingreso.push(colas.reingreso.map((p) => `${p.id} (${p.restante})`));
+        itemsNormal.push(colas.normal);
+      }
+      agregarFilaColaListos(grilla, filaBase, "Prioritaria", itemsReingreso, duracionTotal, columnaInicioInstantes);
+      agregarFilaColaListos(grilla, filaBase + 1, "Normal", itemsNormal, duracionTotal, columnaInicioInstantes);
+    }
+  }
+
+  return {
+    asignarColoresProcesos,
+    construirDatosPorProceso,
+    crearGrillaInteractiva,
+    renderizarGrillaSolucion,
+  };
+})();

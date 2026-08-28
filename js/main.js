@@ -1,0 +1,523 @@
+/**
+ * main.js — Orquestador de la aplicación y UI genérica.
+ *
+ * Cada algoritmo (salvo Multinivel) cumple el mismo contrato: recibe
+ * (procesos, opciones) y devuelve { gantt, franjasIO, colaListosPorInstante,
+ * metricas }. Gracias a eso, este archivo puede tratarlos de forma genérica
+ * a través de REGISTRO_ALGORITMOS — no hay switches gigantes por algoritmo
+ * acá ni en ningún otro lado de la capa de UI. Agregar un algoritmo nuevo es
+ * agregar una entrada a este registro.
+ *
+ * La UI tiene dos secciones separadas a propósito:
+ *   - "Tu Solución": UNA sola grilla interactiva, independiente de cualquier
+ *     algoritmo — es donde el alumno arma su respuesta a mano.
+ *   - "Ver algoritmos": tarjetas, una por algoritmo agregado, cada una con
+ *     su propio dropdown + parámetros y su solución de referencia SIEMPRE
+ *     visible (no hay ninguna grilla interactiva acá). El botón "Corregir"
+ *     de cada tarjeta compara la grilla compartida de "Tu Solución" contra
+ *     la solución de ESE algoritmo.
+ */
+(function () {
+  "use strict";
+
+  /**
+   * Definición de cada parámetro configurable en el header de una tarjeta
+   * de algoritmo. `tipo: "booleano"` se dibuja como checkbox; el resto
+   * (implícito) como input numérico.
+   */
+  const DEFINICION_PARAMETROS = {
+    quantum: { etiqueta: "Quantum", valorPorDefecto: 2, min: 1, step: 1 },
+    alfa: { etiqueta: "Alfa", valorPorDefecto: 0.5, min: 0, max: 1, step: 0.1 },
+    estimacion: { tipo: "booleano", etiqueta: "Usar estimaciones", valorPorDefecto: false },
+  };
+
+  /** Dos líneas de tooltip: la fórmula simbólica arriba, la misma con los números de este proceso abajo. */
+  function armarTooltip(formulaSimbolica, formulaSustituida) {
+    return (
+      `<div class="tooltip-formula-simbolica">${formulaSimbolica}</div>` +
+      `<div class="tooltip-formula-sustituida">${formulaSustituida}</div>`
+    );
+  }
+
+  /**
+   * Tooltips que se ven al pasar el mouse por un proceso en la fila
+   * "Listos" de la solución (con Tippy.js — ver ui/grilla-gantt.js): la
+   * fórmula que arma el desempate, y debajo la misma fórmula con los
+   * números de ESE proceso en ESE instante (`info` es lo que devuelve
+   * `capturarInfoListos` en cada algoritmo). Solo aparecen cuando el
+   * algoritmo realmente está usando una estimación (si no, no hay nada que
+   * explicar: el criterio es directamente la ráfaga real).
+   */
+  function formatearTooltipSJF(info) {
+    return armarTooltip("criterio = estimación de la ráfaga", `criterio = ${info.estimacion}`);
+  }
+
+  function formatearTooltipSRTF(info) {
+    return armarTooltip(
+      "restante_estimado = estimación − ejecutado",
+      `restante_estimado = ${info.estimacion} − ${info.tiempoEjecutado} = ${info.restanteEstimado}`
+    );
+  }
+
+  function formatearTooltipHRRN(info) {
+    const ratio = info.ratio.toFixed(2);
+    const variable = info.esEstimada ? "estimación" : "duración real";
+    return armarTooltip(
+      `ratio = (espera + ${variable}) / ${variable}`,
+      `ratio = (${info.espera} + ${info.estimacion}) / ${info.estimacion} = ${ratio}`
+    );
+  }
+
+  /**
+   * Algoritmo -> { etiqueta, simular, parametros[], tieneCorreccion, modoColaListos }.
+   *
+   * `modoColaListos` decide qué fila(s) de cola de espera se agregan debajo
+   * de la solución de ese algoritmo (ver ui/grilla-gantt.js):
+   *   - "ninguno": no agrega nada (lo usa Multinivel, que no tiene solución).
+   *   - "simple": una única fila de cola de listos.
+   *   - "rrv": dos filas separadas (reingreso con quantum restante, y normal).
+   */
+  const REGISTRO_ALGORITMOS = {
+    fifo: { etiqueta: "FIFO", simular: simularFIFO, parametros: [], tieneCorreccion: true, modoColaListos: "simple" },
+    sjf: {
+      etiqueta: "SJF (no expropiativo)",
+      simular: simularSJF,
+      parametros: ["estimacion", "alfa"],
+      tieneCorreccion: true,
+      modoColaListos: "simple",
+      formatearTooltipListos: formatearTooltipSJF,
+    },
+    srtf: {
+      etiqueta: "SRTF (SJF expropiativo)",
+      simular: simularSRTF,
+      parametros: ["estimacion", "alfa"],
+      tieneCorreccion: true,
+      modoColaListos: "simple",
+      formatearTooltipListos: formatearTooltipSRTF,
+      // Mismo formato para la cola de espera y para las celdas de CPU: en
+      // ambos casos `info` trae { estimacion, tiempoEjecutado, restanteEstimado }.
+      formatearTooltipEjecucion: formatearTooltipSRTF,
+    },
+    hrrn: {
+      etiqueta: "HRRN",
+      simular: simularHRRN,
+      parametros: ["estimacion", "alfa"],
+      tieneCorreccion: true,
+      modoColaListos: "simple",
+      formatearTooltipListos: formatearTooltipHRRN,
+    },
+    prioridad: {
+      etiqueta: "Prioridad (no expropiativa)",
+      simular: simularPrioridad,
+      parametros: [],
+      tieneCorreccion: true,
+      modoColaListos: "simple",
+    },
+    "prioridad-expropiativa": {
+      etiqueta: "Prioridad expropiativa",
+      simular: simularPrioridadExpropiativa,
+      parametros: [],
+      tieneCorreccion: true,
+      modoColaListos: "simple",
+    },
+    "round-robin": {
+      etiqueta: "Round Robin",
+      simular: simularRoundRobin,
+      parametros: ["quantum"],
+      tieneCorreccion: true,
+      modoColaListos: "simple",
+    },
+    "round-robin-virtual": {
+      etiqueta: "Round Robin Virtual",
+      simular: simularRoundRobinVirtual,
+      parametros: ["quantum"],
+      tieneCorreccion: true,
+      modoColaListos: "rrv",
+    },
+    multinivel: {
+      etiqueta: "Multinivel (manual)",
+      simular: null,
+      parametros: [],
+      tieneCorreccion: false,
+      modoColaListos: "ninguno",
+    },
+  };
+
+  const estado = {
+    procesos: [],
+    bloques: [],
+    grillaSolucion: null, // controlador de la única grilla interactiva de "Tu Solución" (incluye la fila de cola)
+  };
+
+  let contadorBloques = 0;
+
+  // ----------------------------------------------------------------------
+  // Procesos
+  // ----------------------------------------------------------------------
+
+  function renderizarProcesos() {
+    const contenedor = document.getElementById("contenedor-procesos");
+    EditorProcesos.renderizarTablaProcesos(contenedor, estado.procesos, {
+      onCambio: () => {
+        // Cambiar los procesos redefine el ejercicio entero: se reconstruye
+        // "Tu Solución" desde cero (las filas dependen de qué procesos hay)
+        // y se recalculan todos los algoritmos agregados.
+        renderizarSeccionSolucion();
+        recalcularTodosLosBloques();
+      },
+    });
+  }
+
+  // ----------------------------------------------------------------------
+  // "Tu Solución": la única grilla interactiva, independiente del algoritmo
+  // ----------------------------------------------------------------------
+
+  /** Duración inicial razonable: el trabajo total del proceso más largo, sin esperas. */
+  function calcularDuracionInicialSugerida(procesos) {
+    if (procesos.length === 0) return 1;
+    return Math.max(
+      1,
+      ...procesos.map((p) => p.arribo + p.rafagas.reduce((acc, r) => acc + r.duracion, 0))
+    );
+  }
+
+  function renderizarSeccionSolucion() {
+    const contenedorGrilla = document.getElementById("contenedor-grilla-solucion");
+    const colores = GrillaGantt.asignarColoresProcesos(estado.procesos);
+    const duracionInicial = calcularDuracionInicialSugerida(estado.procesos);
+    estado.grillaSolucion = GrillaGantt.crearGrillaInteractiva(contenedorGrilla, estado.procesos, duracionInicial, colores);
+  }
+
+  // ----------------------------------------------------------------------
+  // "Ver algoritmos": tarjetas, una por algoritmo agregado
+  // ----------------------------------------------------------------------
+
+  function crearBloque(algoritmoInicial) {
+    contadorBloques += 1;
+    return {
+      id: `bloque-${contadorBloques}`,
+      algoritmo: algoritmoInicial,
+      parametros: valoresPorDefectoParametros(algoritmoInicial),
+      resultadoActual: null,
+    };
+  }
+
+  function valoresPorDefectoParametros(algoritmo) {
+    const parametros = {};
+    REGISTRO_ALGORITMOS[algoritmo].parametros.forEach((clave) => {
+      parametros[clave] = DEFINICION_PARAMETROS[clave].valorPorDefecto;
+    });
+    // HRRN es, por definición, "el algoritmo que trabaja con estimaciones"
+    // — arranca con el toggle activado, a diferencia de SJF/SRTF (que por
+    // default usan la ráfaga real, su definición clásica).
+    if (algoritmo === "hrrn") parametros.estimacion = true;
+    return parametros;
+  }
+
+  function agregarBloque() {
+    const bloque = crearBloque("fifo");
+    estado.bloques.push(bloque);
+    bloque.elementoDOM = construirElementoBloque(bloque);
+    document.getElementById("contenedor-bloques").appendChild(bloque.elementoDOM);
+  }
+
+  function eliminarBloque(bloque) {
+    estado.bloques = estado.bloques.filter((b) => b.id !== bloque.id);
+    bloque.elementoDOM.remove();
+  }
+
+  /**
+   * Reconstruye SOLO la tarjeta indicada y la reemplaza en su lugar. Nunca
+   * toca "Tu Solución" ni las demás tarjetas: cambiar el algoritmo o los
+   * parámetros de UNA tarjeta no debería afectar nada más.
+   */
+  function rerenderizarBloque(bloque) {
+    const nuevoElemento = construirElementoBloque(bloque);
+    bloque.elementoDOM.replaceWith(nuevoElemento);
+    bloque.elementoDOM = nuevoElemento;
+  }
+
+  function construirElementoBloque(bloque) {
+    const seccion = document.createElement("section");
+    seccion.className = "bloque-algoritmo";
+
+    seccion.appendChild(construirHeaderBloque(bloque));
+
+    const contenidoBloque = document.createElement("div");
+    contenidoBloque.className = "contenido-bloque";
+    seccion.appendChild(contenidoBloque);
+
+    if (bloque.algoritmo === "multinivel") {
+      construirContenidoMultinivel(contenidoBloque);
+    } else {
+      construirContenidoAlgoritmoSimulado(contenidoBloque, bloque);
+    }
+
+    return seccion;
+  }
+
+  function construirHeaderBloque(bloque) {
+    const header = document.createElement("div");
+    header.className = "header-bloque";
+
+    const selectAlgoritmo = document.createElement("select");
+    selectAlgoritmo.className = "select-algoritmo";
+    Object.keys(REGISTRO_ALGORITMOS).forEach((clave) => {
+      const opcion = document.createElement("option");
+      opcion.value = clave;
+      opcion.textContent = REGISTRO_ALGORITMOS[clave].etiqueta;
+      if (clave === bloque.algoritmo) opcion.selected = true;
+      selectAlgoritmo.appendChild(opcion);
+    });
+    selectAlgoritmo.addEventListener("change", () => {
+      bloque.algoritmo = selectAlgoritmo.value;
+      bloque.parametros = valoresPorDefectoParametros(bloque.algoritmo);
+      rerenderizarBloque(bloque);
+    });
+    header.appendChild(selectAlgoritmo);
+
+    const contenedorParametros = document.createElement("div");
+    contenedorParametros.className = "parametros-bloque";
+    // Los parámetros que requiere cada algoritmo salen del registro — no hay
+    // casos hardcodeados acá: si un algoritmo declara ["quantum"], aparece
+    // el input de quantum; si declara [], no aparece ningún parámetro extra.
+    REGISTRO_ALGORITMOS[bloque.algoritmo].parametros.forEach((clave) => {
+      // "alfa" solo importa si además se están usando estimaciones — si el
+      // toggle está apagado no se usa para nada, así que no se muestra.
+      if (clave === "alfa" && !bloque.parametros.estimacion) return;
+      contenedorParametros.appendChild(construirInputParametro(bloque, clave));
+    });
+    header.appendChild(contenedorParametros);
+
+    const botonEliminar = document.createElement("button");
+    botonEliminar.type = "button";
+    botonEliminar.className = "boton-eliminar-bloque";
+    botonEliminar.textContent = "Quitar";
+    botonEliminar.addEventListener("click", () => eliminarBloque(bloque));
+    header.appendChild(botonEliminar);
+
+    return header;
+  }
+
+  function construirInputParametro(bloque, clave) {
+    const definicion = DEFINICION_PARAMETROS[clave];
+    const contenedor = document.createElement("label");
+    contenedor.className = "campo-parametro";
+
+    if (definicion.tipo === "booleano") {
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !!bloque.parametros[clave];
+      input.addEventListener("change", () => {
+        bloque.parametros[clave] = input.checked;
+        // Prender/apagar el toggle cambia qué otros parámetros se ven
+        // (ej. "alfa") y si aparece la columna de estimación inicial en la
+        // grilla — hace falta reconstruir toda la tarjeta, no solo
+        // recalcular.
+        rerenderizarBloque(bloque);
+      });
+      contenedor.appendChild(input);
+
+      const texto = document.createElement("span");
+      texto.textContent = definicion.etiqueta;
+      contenedor.appendChild(texto);
+
+      return contenedor;
+    }
+
+    const texto = document.createElement("span");
+    texto.textContent = definicion.etiqueta;
+    contenedor.appendChild(texto);
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = String(definicion.min);
+    if (definicion.max != null) input.max = String(definicion.max);
+    if (definicion.step != null) input.step = String(definicion.step);
+    input.value = bloque.parametros[clave];
+    input.addEventListener("change", () => {
+      bloque.parametros[clave] = Number(input.value);
+      ejecutarYRenderizarBloque(bloque);
+    });
+    contenedor.appendChild(input);
+
+    return contenedor;
+  }
+
+  /**
+   * Config de la columna extra de estimación inicial (ver
+   * ui/grilla-gantt.js): se agrega DENTRO de la misma grilla de la
+   * solución, entre la etiqueta del proceso y sus celdas de instantes — no
+   * es una tabla aparte, es una columna más de la grilla que ya existe.
+   * La usan SJF, SRTF y HRRN, cada vez que su toggle "Usar estimaciones"
+   * está activado.
+   */
+  function construirColumnaExtraEstimacion() {
+    return {
+      encabezado: "Est.",
+      obtenerValor: (procesoId) => {
+        const proceso = estado.procesos.find((p) => p.id === procesoId);
+        return EditorProcesos.estimacionEfectiva(proceso);
+      },
+      onCambio: (procesoId, nuevoValor) => {
+        const proceso = estado.procesos.find((p) => p.id === procesoId);
+        proceso.estimacionInicial = nuevoValor || 0;
+        // Recalcula todas las tarjetas (no solo esta): la estimación
+        // inicial es por proceso, no por bloque — si hay más de un bloque
+        // con estimaciones activadas (sea SJF, SRTF o HRRN), todos
+        // comparten el mismo valor y deben quedar sincronizados.
+        recalcularTodosLosBloques();
+      },
+    };
+  }
+
+  function construirContenidoAlgoritmoSimulado(contenedor, bloque) {
+    const areaGrillaSolucion = document.createElement("div");
+    areaGrillaSolucion.className = "area-grilla-solucion";
+    contenedor.appendChild(areaGrillaSolucion);
+
+    const areaAcciones = document.createElement("div");
+    areaAcciones.className = "area-acciones";
+    const botonCorregir = document.createElement("button");
+    botonCorregir.type = "button";
+    botonCorregir.className = "boton-corregir";
+    botonCorregir.textContent = "Corregir mi solución";
+    areaAcciones.appendChild(botonCorregir);
+
+    const mensajeResultado = document.createElement("span");
+    mensajeResultado.className = "mensaje-resultado";
+    areaAcciones.appendChild(mensajeResultado);
+    contenedor.appendChild(areaAcciones);
+
+    const areaMetricas = document.createElement("div");
+    areaMetricas.className = "area-metricas";
+    contenedor.appendChild(areaMetricas);
+
+    botonCorregir.addEventListener("click", () => {
+      if (!estado.grillaSolucion || !bloque.resultadoActual) return;
+      const respuesta = estado.grillaSolucion.obtenerRespuesta();
+      estado.grillaSolucion.limpiarMarcas();
+      const { correcto, celdasIncorrectas } = Corrector.corregir(respuesta, estado.procesos, bloque.resultadoActual);
+      celdasIncorrectas.forEach(({ procesoId, instante }) =>
+        estado.grillaSolucion.marcarCelda(procesoId, instante, "celda-incorrecta")
+      );
+      mensajeResultado.textContent = correcto
+        ? "¡Correcto!"
+        : "Incorrecto — revisá las celdas marcadas en Tu Solución.";
+      mensajeResultado.className = `mensaje-resultado ${correcto ? "mensaje-correcto" : "mensaje-incorrecto"}`;
+    });
+
+    bloque._refs = { areaGrillaSolucion, areaMetricas, mensajeResultado };
+    ejecutarYRenderizarBloque(bloque);
+  }
+
+  function ejecutarYRenderizarBloque(bloque) {
+    if (estado.procesos.length === 0 || !bloque._refs) return;
+
+    const definicion = REGISTRO_ALGORITMOS[bloque.algoritmo];
+    bloque.resultadoActual = definicion.simular(estado.procesos, bloque.parametros);
+
+    const colores = GrillaGantt.asignarColoresProcesos(estado.procesos);
+    GrillaGantt.renderizarGrillaSolucion(bloque._refs.areaGrillaSolucion, estado.procesos, bloque.resultadoActual, colores, {
+      modo: definicion.modoColaListos,
+      columnaExtra: bloque.parametros.estimacion ? construirColumnaExtraEstimacion() : null,
+      formatearTooltipListos: definicion.formatearTooltipListos,
+      formatearTooltipEjecucion: definicion.formatearTooltipEjecucion,
+    });
+    Metricas.renderizarMetricas(bloque._refs.areaMetricas, bloque.resultadoActual.metricas);
+
+    bloque._refs.mensajeResultado.textContent = "";
+    bloque._refs.mensajeResultado.className = "mensaje-resultado";
+
+    // Si esta solución necesita más instantes de los que "Tu Solución" tiene
+    // hoy, se le agregan columnas de más (sin borrar lo que el alumno ya
+    // completó) para que siempre haya lugar suficiente para responder.
+    if (estado.grillaSolucion) {
+      const { duracionTotal } = GrillaGantt.construirDatosPorProceso(estado.procesos, bloque.resultadoActual);
+      estado.grillaSolucion.asegurarDuracionMinima(duracionTotal);
+    }
+  }
+
+  function recalcularTodosLosBloques() {
+    estado.bloques.forEach((bloque) => {
+      if (bloque.algoritmo !== "multinivel") ejecutarYRenderizarBloque(bloque);
+    });
+  }
+
+  // ----------------------------------------------------------------------
+  // Tarjeta Multinivel (manual, sin corrección ni solución)
+  // ----------------------------------------------------------------------
+
+  function construirContenidoMultinivel(contenedor) {
+    const aviso = document.createElement("p");
+    aviso.className = "aviso-multinivel";
+    aviso.textContent =
+      "Modo manual: no tiene solución de referencia ni corrección automática. Armá las colas y tu grilla en la sección \"Tu Solución\".";
+    contenedor.appendChild(aviso);
+  }
+
+  // ----------------------------------------------------------------------
+  // Carga de datos (ejemplo / aleatorio)
+  // ----------------------------------------------------------------------
+
+  function cargarProcesos(nuevosProcesos) {
+    estado.procesos = nuevosProcesos;
+    renderizarProcesos();
+    renderizarSeccionSolucion();
+    recalcularTodosLosBloques();
+  }
+
+  async function cargarEjemplo() {
+    try {
+      const respuesta = await fetch("data/ejercicios-ejemplo.json");
+      const datos = await respuesta.json();
+      const ejemplo = datos.ejercicios[0];
+      cargarProcesos(ejemplo.procesos.map((p) => ({ ...p, hilos: [] })));
+    } catch (error) {
+      alert("No se pudo cargar el ejemplo (¿estás sirviendo el proyecto con un servidor local?).");
+    }
+  }
+
+  function generarAleatorio() {
+    const cantidad = 3 + Math.floor(Math.random() * 3); // entre 3 y 5 procesos
+    const procesos = [];
+    for (let i = 1; i <= cantidad; i++) {
+      const rafagas = [{ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 6) }];
+      if (Math.random() > 0.4) {
+        rafagas.push({ tipo: "IO", duracion: 1 + Math.floor(Math.random() * 4) });
+        rafagas.push({ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 4) });
+      }
+      if (Math.random() > 0.4) {
+        rafagas.push({ tipo: "IO", duracion: 1 + Math.floor(Math.random() * 4) });
+        rafagas.push({ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 4) });
+      }
+      procesos.push({
+        id: `P${i}`,
+        arribo: Math.floor(Math.random() * 5),
+        prioridad: 1 + Math.floor(Math.random() * 5),
+        rafagas,
+        estimacionInicial: null,
+        hilos: [],
+      });
+    }
+    cargarProcesos(procesos);
+  }
+
+  // ----------------------------------------------------------------------
+  // Arranque
+  // ----------------------------------------------------------------------
+
+  function inicializar() {
+    document.getElementById("boton-cargar-ejemplo").addEventListener("click", cargarEjemplo);
+    document.getElementById("boton-generar-aleatorio").addEventListener("click", generarAleatorio);
+    document.getElementById("boton-agregar-bloque").addEventListener("click", agregarBloque);
+
+    cargarProcesos([
+      EditorProcesos.crearProcesoVacio("P1"),
+      { ...EditorProcesos.crearProcesoVacio("P2"), arribo: 1 },
+    ]);
+    agregarBloque();
+  }
+
+  document.addEventListener("DOMContentLoaded", inicializar);
+})();

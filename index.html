@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simulador de Planificación de CPU</title>
+  <link rel="stylesheet" href="js/vendor/tippy.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="encabezado-app">
+    <h1>Simulador de Planificación de CPU</h1>
+    <div class="acciones-globales">
+      <button type="button" id="boton-cargar-ejemplo">Cargar ejemplo</button>
+      <button type="button" id="boton-generar-aleatorio">Generar aleatorio</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="seccion-procesos">
+      <h2>Procesos</h2>
+      <div id="contenedor-procesos"></div>
+    </section>
+
+    <section class="seccion-tu-solucion">
+      <h2>Tu Solución</h2>
+      <p class="explicacion-seccion">
+        Completá acá tu respuesta a mano, sin importar qué algoritmo estés practicando. Un click alterna
+        CPU → IO → nada; "+ Agregar instante" suma columnas si te quedás corto. La fila "Cola" de abajo es
+        para armar a mano la cola de listos de cada instante — se puede arrastrar para reordenar.
+      </p>
+      <div id="contenedor-grilla-solucion"></div>
+    </section>
+
+    <section class="seccion-algoritmos">
+      <div class="encabezado-seccion-bloques">
+        <h2>Ver algoritmos</h2>
+        <button type="button" id="boton-agregar-bloque">+ Agregar algoritmo</button>
+      </div>
+      <div id="contenedor-bloques"></div>
+    </section>
+  </main>
+
+  <!-- Tippy.js (+ Popper.js), vendorizado localmente para que la app siga
+       funcionando sin internet (uso en aula/laboratorio). Usado para los
+       tooltips de "por qué está acá este proceso en la cola" (ver
+       ui/grilla-gantt.js). -->
+  <script src="js/vendor/popper.umd.min.js"></script>
+  <script src="js/vendor/tippy.umd.min.js"></script>
+  <script src="js/simulador-core.js"></script>
+  <script src="js/algoritmos/fifo.js"></script>
+  <script src="js/algoritmos/sjf.js"></script>
+  <script src="js/algoritmos/srtf.js"></script>
+  <script src="js/algoritmos/hrrn.js"></script>
+  <script src="js/algoritmos/prioridad.js"></script>
+  <script src="js/algoritmos/prioridad-expropiativa.js"></script>
+  <script src="js/algoritmos/round-robin.js"></script>
+  <script src="js/algoritmos/round-robin-virtual.js"></script>
+  <script src="js/algoritmos/multinivel.js"></script>
+  <script src="js/ui/grilla-gantt.js"></script>
+  <script src="js/ui/corrector.js"></script>
+  <script src="js/ui/metricas.js"></script>
+  <script src="js/ui/editor-procesos.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+{
+  "ejercicios": [
+    {
+      "nombre": "Ejercicio básico con IO",
+      "procesos": [
+        {
+          "id": "P1",
+          "arribo": 0,
+          "prioridad": 2,
+          "rafagas": [
+            { "tipo": "CPU", "duracion": 4 },
+            { "tipo": "IO", "duracion": 3 },
+            { "tipo": "CPU", "duracion": 2 }
+          ],
+          "estimacionInicial": null
+        },
+        {
+          "id": "P2",
+          "arribo": 1,
+          "prioridad": 1,
+          "rafagas": [
+            { "tipo": "CPU", "duracion": 3 },
+            { "tipo": "IO", "duracion": 2 },
+            { "tipo": "CPU", "duracion": 1 }
+          ],
+          "estimacionInicial": null
+        },
+        {
+          "id": "P3",
+          "arribo": 2,
+          "prioridad": 3,
+          "rafagas": [
+            { "tipo": "CPU", "duracion": 5 }
+          ],
+          "estimacionInicial": null
+        },
+        {
+          "id": "P4",
+          "arribo": 4,
+          "prioridad": 1,
+          "rafagas": [
+            { "tipo": "CPU", "duracion": 2 },
+            { "tipo": "IO", "duracion": 4 },
+            { "tipo": "CPU", "duracion": 3 }
+          ],
+          "estimacionInicial": null
+        }
+      ]
+    }
+  ]
+}
