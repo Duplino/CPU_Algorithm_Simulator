@@ -238,6 +238,14 @@ const SimuladorCore = (function () {
       return {
         ...base,
         esCompuesta: true,
+        // "so": el SO no distingue hilos, así que la E/S de CUALQUIER
+        // miembro bloquea a todo el grupo hasta que esa E/S puntual
+        // termina (ver resolverFinRafagaCompuesta/resolverRetornosDeIOCompuestos).
+        // "biblioteca"/"jacketing": un hilo en E/S no bloquea a sus
+        // hermanos — ambas producen el mismo resultado simulado, solo
+        // difiere el mecanismo con el que se logra.
+        bloqueaGrupo: u.proceso.algoritmoBiblioteca === "so",
+        miembroBloqueanteId: null,
         miembros,
         miembroActivoId: activo.id,
         rafagas: activo.rafagas,
@@ -308,6 +316,16 @@ const SimuladorCore = (function () {
       miembro.estado = "io";
       miembro.instanteFinIO = fin;
       franjasIO.push({ proceso: miembro.id, inicio, fin });
+
+      // Biblioteca "manejada por el SO": esta E/S puntual bloquea a TODO
+      // el grupo, sin importar si algún otro miembro está listo — el SO no
+      // sabe que hay más hilos, así que no le da la CPU al proceso hasta
+      // que ESTA E/S puntual termine (ver resolverRetornosDeIOCompuestos,
+      // que respeta `miembroBloqueanteId`).
+      if (estadoCompuesto.bloqueaGrupo) {
+        estadoCompuesto.miembroBloqueanteId = miembro.id;
+        return "vacia";
+      }
     }
 
     const siguienteActivo = elegirSiguienteMiembroListo(estadoCompuesto);
@@ -361,6 +379,12 @@ const SimuladorCore = (function () {
 
     if (estadoCompuesto.estado === "listo" || estadoCompuesto.estado === "ejecutando" || estadoCompuesto.estado === "terminado") return;
 
+    // Biblioteca "manejada por el SO": si el grupo está bloqueado
+    // esperando a un miembro puntual, el arribo de UN HILO NUEVO no lo
+    // despierta — para el SO, el proceso entero sigue en E/S hasta que
+    // vuelva justo ese miembro (ver resolverFinRafagaCompuesta).
+    if (estadoCompuesto.bloqueaGrupo && estadoCompuesto.miembroBloqueanteId != null) return;
+
     const activo = estadoCompuesto.miembros.find((m) => m.id === estadoCompuesto.miembroActivoId);
     const miembroParaActivar = activo && activo.estado === "listo" ? activo : estadoCompuesto.miembros.find((m) => m.estado === "listo");
     activarMiembro(estadoCompuesto, miembroParaActivar);
@@ -383,6 +407,7 @@ const SimuladorCore = (function () {
       if (!e.esCompuesta || e.estado === "terminado") return;
 
       let alguienQuedoListo = false;
+      let elBloqueanteVolvio = false;
       e.miembros.forEach((m) => {
         if (m.estado === "io" && m.instanteFinIO === instante) {
           m.indiceRafaga += 1;
@@ -391,29 +416,38 @@ const SimuladorCore = (function () {
           } else {
             m.estado = "listo";
             alguienQuedoListo = true;
+            if (m.id === e.miembroBloqueanteId) elBloqueanteVolvio = true;
           }
         }
       });
 
       if (e.estado === "listo" || e.estado === "ejecutando") return;
-
-      if (alguienQuedoListo) {
-        // OJO: hay que llamar a activarMiembro SIEMPRE acá, incluso si el
-        // miembro que quedó listo es el mismo que ya estaba marcado como
-        // activo — es lo que resincroniza `rafagas`/`indiceRafaga` de la
-        // unidad compuesta con el `indiceRafaga` que el miembro acaba de
-        // avanzar (arriba); si se lo saltea en ese caso, `indiceRafaga`
-        // queda apuntando a la ráfaga de CPU ya terminada (no a la
-        // siguiente), y como su `restante` ya está en 0, la unidad nunca
-        // vuelve a detectar "fin de ráfaga" — bucle infinito.
-        const activo = e.miembros.find((m) => m.id === e.miembroActivoId);
-        const miembroParaActivar = activo && activo.estado === "listo" ? activo : e.miembros.find((m) => m.estado === "listo");
-        activarMiembro(e, miembroParaActivar);
-        marcarListo(e, "io");
-      } else if (e.miembros.every((m) => m.estado === "terminado")) {
-        e.estado = "terminado";
-        e.instanteTerminacion = instante;
+      if (!alguienQuedoListo) {
+        if (e.miembros.every((m) => m.estado === "terminado")) {
+          e.estado = "terminado";
+          e.instanteTerminacion = instante;
+        }
+        return;
       }
+
+      // Biblioteca "manejada por el SO": aunque algún otro miembro se haya
+      // puesto "listo" recién, el grupo sigue bloqueado hasta que vuelva
+      // JUSTO el miembro cuya E/S tiene ocupado al SO.
+      if (e.bloqueaGrupo && e.miembroBloqueanteId != null && !elBloqueanteVolvio) return;
+
+      // OJO: hay que llamar a activarMiembro SIEMPRE acá, incluso si el
+      // miembro que quedó listo es el mismo que ya estaba marcado como
+      // activo — es lo que resincroniza `rafagas`/`indiceRafaga` de la
+      // unidad compuesta con el `indiceRafaga` que el miembro acaba de
+      // avanzar (arriba); si se lo saltea en ese caso, `indiceRafaga`
+      // queda apuntando a la ráfaga de CPU ya terminada (no a la
+      // siguiente), y como su `restante` ya está en 0, la unidad nunca
+      // vuelve a detectar "fin de ráfaga" — bucle infinito.
+      e.miembroBloqueanteId = null;
+      const activo = e.miembros.find((m) => m.id === e.miembroActivoId);
+      const miembroParaActivar = activo && activo.estado === "listo" ? activo : e.miembros.find((m) => m.estado === "listo");
+      activarMiembro(e, miembroParaActivar);
+      marcarListo(e, "io");
     });
   }
 

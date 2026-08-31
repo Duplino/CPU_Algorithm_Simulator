@@ -31,16 +31,27 @@
  * "Proceso" (rowspan) los agrupa visualmente. La numeración de hilos se
  * reinicia en cada proceso (el "1" de A.1 no tiene relación con el "1" de
  * B.1). Si el proceso tiene algún hilo ULT, aparece además una fila propia,
- * debajo de todas, para elegir el algoritmo de biblioteca que resuelve sus
- * llamadas bloqueantes (Jacketing o Llamadas no bloqueantes) — es una
+ * debajo de todas, para elegir cómo se manejan sus llamadas bloqueantes de
+ * E/S (manejada por el SO, por la biblioteca, o con Jacketing) — es una
  * propiedad del PROCESO (de su biblioteca ULT), no de cada hilo individual.
  */
 const EditorProcesos = (function () {
   "use strict";
 
+  // Las tres formas de manejar una E/S bloqueante de un hilo ULT:
+  //   - "so": sin ningún manejo especial, la llamada va directo al SO, que
+  //     no distingue hilos — bloquea a TODO el proceso (y por lo tanto a
+  //     todos sus hilos ULT hermanos) hasta que esa E/S puntual termina.
+  //   - "biblioteca": la biblioteca ULT usa llamadas no bloqueantes y
+  //     administra ella misma la espera, así que un hilo en E/S no bloquea
+  //     a sus hermanos.
+  //   - "jacketing": una capa que intercepta las llamadas bloqueantes y las
+  //     traduce a no bloqueantes — mismo resultado que "biblioteca" (los
+  //     hermanos no quedan bloqueados), pero por un mecanismo distinto.
   const OPCIONES_ALGORITMO_BIBLIOTECA = [
+    { valor: "so", etiqueta: "Manejada por el SO" },
+    { valor: "biblioteca", etiqueta: "Manejada por la biblioteca" },
     { valor: "jacketing", etiqueta: "Jacketing" },
-    { valor: "no-bloqueante", etiqueta: "Llamadas no bloqueantes" },
   ];
 
   function tipoRafagaEnIndice(indice) {
