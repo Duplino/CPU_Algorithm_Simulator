@@ -2,7 +2,7 @@
 
 Herramienta web hecha para la materia **Sistemas Operativos** de la **UTN FRBA**, pensada para practicar la construcción manual de diagramas de Gantt de planificación de CPU y compararlos contra la solución correcta calculada automáticamente.
 
-🔗 **Sitio:** [duplino.github.io/Cpu_Algorithm_Simulator](https://duplino.github.io/Cpu_Algorithm_Simulator/)
+🔗 **Sitio:** [https://duplino.github.io/CPU_Algorithm_Simulator/](https://duplino.github.io/CPU_Algorithm_Simulator/)
 
 ## Qué hace
 
