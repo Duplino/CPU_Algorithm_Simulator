@@ -32,7 +32,11 @@ const GrillaGantt = (function () {
 
   const CANTIDAD_COLORES = 8;
   const ORDEN_ESTADOS = ["", "CPU", "IO"];
-  const ANCHO_COLUMNA_ETIQUETA = "88px";
+  // Dos columnas de etiqueta: la primera es el proceso (se agranda con
+  // rowspan para cubrir las filas de sus hilos), la segunda es el hilo
+  // puntual (solo tiene contenido en filas de hilos agregados).
+  const ANCHO_COLUMNA_PROCESO = "64px";
+  const ANCHO_COLUMNA_HILO = "52px";
   const ANCHO_COLUMNA_EXTRA = "56px";
   const ANCHO_MINIMO_COLUMNA = "38px";
 
@@ -40,15 +44,50 @@ const GrillaGantt = (function () {
   function asignarColoresProcesos(procesos) {
     const colores = {};
     procesos.forEach((p, indice) => {
-      colores[p.id] = `proceso-color-${(indice % CANTIDAD_COLORES) + 1}`;
+      const clase = `proceso-color-${(indice % CANTIDAD_COLORES) + 1}`;
+      colores[p.id] = clase;
+      // Los hilos de un proceso comparten el color de su proceso — son
+      // parte de la misma "familia", no procesos independientes.
+      p.hilos.forEach((hilo) => {
+        colores[`${p.id}.${hilo.id}`] = clase;
+      });
     });
     return colores;
   }
 
   /**
-   * Reconstruye, para cada proceso, un array con su estado ("CPU" | "IO" |
-   * null) en cada instante, a partir de lo que devuelve un algoritmo
-   * (`gantt` para los tramos de CPU, `franjasIO` para los de IO).
+   * Convierte la lista de procesos en la lista plana de "carriles" que
+   * realmente dibuja la grilla: uno por cada hilo de `proceso.hilos[]`.
+   * Ningún hilo tiene trato especial — un proceso siempre tiene al menos
+   * uno, y todos se recorren de la misma manera. `esPrimerHiloDelProceso`
+   * marca únicamente al primero de cada proceso, que es el único dato que
+   * todavía hace falta distinguir (para la columna extra de estimación o
+   * prioridad, que es por proceso y se muestra una sola vez — ver más abajo).
+   */
+  function construirCarriles(procesos) {
+    const carriles = [];
+    procesos.forEach((proceso) => {
+      proceso.hilos.forEach((hilo, indice) => {
+        carriles.push({
+          id: `${proceso.id}.${hilo.id}`,
+          procesoId: proceso.id,
+          rafagas: hilo.rafagas,
+          etiqueta: hilo.id,
+          esPrimerHiloDelProceso: indice === 0,
+        });
+      });
+    });
+    return carriles;
+  }
+
+  /**
+   * Reconstruye, para cada CARRIL (proceso o hilo — ver `construirCarriles`),
+   * un array con su estado ("CPU" | "IO" | null) en cada instante, a partir
+   * de lo que devuelve un algoritmo (`gantt` para los tramos de CPU,
+   * `franjasIO` para los de IO). Ningún algoritmo simula hilos todavía, así
+   * que sus datos siempre quedan en null (fila vacía, editable a mano nomás
+   * en "Tu Solución") — solo el carril principal de cada proceso tiene
+   * datos reales, porque es el único que el motor conoce.
    */
   function construirDatosPorProceso(procesos, resultado) {
     const finesGantt = resultado.gantt.map((b) => b.fin);
@@ -56,8 +95,8 @@ const GrillaGantt = (function () {
     const duracionTotal = Math.max(0, ...finesGantt, ...finesIO);
 
     const datos = {};
-    procesos.forEach((p) => {
-      datos[p.id] = new Array(duracionTotal).fill(null);
+    construirCarriles(procesos).forEach((carril) => {
+      datos[carril.id] = new Array(duracionTotal).fill(null);
     });
 
     resultado.gantt.forEach((bloque) => {
@@ -88,26 +127,36 @@ const GrillaGantt = (function () {
    */
   function construirMarcadoresTransicion(procesos, resultado) {
     const marcadores = {};
-    procesos.forEach((p) => (marcadores[p.id] = {}));
+    construirCarriles(procesos).forEach((c) => (marcadores[c.id] = {}));
 
-    const instanteTerminacion = {};
-    procesos.forEach((p) => {
-      const metrica = resultado.metricas[p.id];
-      if (metrica) instanteTerminacion[p.id] = p.arribo + metrica.retorno;
+    // "Terminado" se deriva de la propia actividad de CADA carril (no de
+    // `resultado.metricas`, que solo trae una fila por proceso): es el
+    // tramo de CPU cuyo fin coincide con la ÚLTIMA vez que ese carril tuvo
+    // actividad (CPU o IO) en toda la solución — así funciona igual para
+    // un proceso, un hilo KLT independiente o un hilo ULT dentro de un
+    // grupo, sin que este archivo necesite saber nada de esa distinción.
+    const ultimaActividad = {};
+    const anotarUltimaActividad = (id, fin) => {
+      ultimaActividad[id] = Math.max(ultimaActividad[id] || 0, fin);
+    };
+    resultado.gantt.forEach((bloque) => {
+      if (bloque.tipo === "CPU") anotarUltimaActividad(bloque.proceso, bloque.fin);
     });
 
     const iniciosDeIOPorProceso = {};
     (resultado.franjasIO || []).forEach((franja) => {
       if (!iniciosDeIOPorProceso[franja.proceso]) iniciosDeIOPorProceso[franja.proceso] = new Set();
       iniciosDeIOPorProceso[franja.proceso].add(franja.inicio);
+      anotarUltimaActividad(franja.proceso, franja.fin);
     });
 
     resultado.gantt.forEach((bloque) => {
       if (bloque.tipo !== "CPU") return;
       let razon;
-      if (instanteTerminacion[bloque.proceso] === bloque.fin) razon = "terminado";
-      else if (iniciosDeIOPorProceso[bloque.proceso] && iniciosDeIOPorProceso[bloque.proceso].has(bloque.fin)) razon = "io";
+      if (iniciosDeIOPorProceso[bloque.proceso] && iniciosDeIOPorProceso[bloque.proceso].has(bloque.fin)) razon = "io";
+      else if (ultimaActividad[bloque.proceso] === bloque.fin) razon = "terminado";
       else razon = "desalojado";
+      if (!marcadores[bloque.proceso]) marcadores[bloque.proceso] = {};
       marcadores[bloque.proceso][bloque.fin - 1] = razon;
     });
 
@@ -175,9 +224,11 @@ const GrillaGantt = (function () {
   }
 
   /**
-   * Construye la grilla swimlane completa: una fila por proceso + una fila
-   * final con el eje de instantes, cuyos números quedan sobre las líneas
-   * divisorias de columna (no centrados en la celda).
+   * Construye la grilla swimlane completa: una fila por CARRIL (el hilo
+   * principal de cada proceso, más una fila extra por cada hilo que se le
+   * haya agregado — ver `construirCarriles`) + una fila final con el eje de
+   * instantes, cuyos números quedan sobre las líneas divisorias de columna
+   * (no centrados en la celda).
    *
    * Todas las celdas se ubican con `grid-row`/`grid-column` explícitos (en
    * vez de dejar que el orden del DOM las acomode solas) para poder agregar
@@ -198,40 +249,65 @@ const GrillaGantt = (function () {
 
     if (duracionInicial <= 0 || procesos.length === 0) return null;
 
+    const carriles = construirCarriles(procesos);
+
     const grilla = document.createElement("div");
     grilla.className = "grilla-swimlane";
 
-    // Si hay una columna extra (ej. la estimación inicial de HRRN), va
-    // pegada a la etiqueta del proceso, y todo lo demás (instantes, eje,
-    // cola) se corre una columna a la derecha.
+    // Etiquetas de proceso e hilo van en dos columnas separadas (1 y 2): la
+    // del proceso se agranda (grid-row en span) para cubrir también las
+    // filas de sus hilos, y la columna extra (si hay) va pegada a la
+    // derecha de esas dos — todo lo demás (instantes, eje, cola) se corre
+    // en consecuencia.
     const offsetColumnas = columnaExtra ? 1 : 0;
-    const columnaInicioInstantes = 2 + offsetColumnas;
+    const columnaInicioInstantes = 3 + offsetColumnas;
 
     let duracionActual = 0;
     const celdasPorInstante = [];
     const celdasPorProceso = {};
-    procesos.forEach((p) => (celdasPorProceso[p.id] = []));
+    carriles.forEach((c) => (celdasPorProceso[c.id] = []));
 
-    procesos.forEach((proceso, indiceProceso) => {
-      const etiqueta = document.createElement("div");
-      etiqueta.className = "etiqueta-proceso";
-      etiqueta.textContent = proceso.id;
-      etiqueta.style.gridRow = String(indiceProceso + 1);
-      etiqueta.style.gridColumn = "1";
-      grilla.appendChild(etiqueta);
+    // Columna 1: una etiqueta por PROCESO (no por carril), que ocupa con su
+    // propio grid-row en span todas las filas de sus hilos — así "crece"
+    // para cubrirlas a todas por igual (ninguna es "la principal").
+    let filaAcumulada = 0;
+    procesos.forEach((proceso) => {
+      const cantidadFilasProceso = proceso.hilos.length;
+      const etiquetaProceso = document.createElement("div");
+      etiquetaProceso.className = "etiqueta-proceso";
+      etiquetaProceso.textContent = proceso.id;
+      etiquetaProceso.style.gridRow =
+        cantidadFilasProceso > 1 ? `${filaAcumulada + 1} / span ${cantidadFilasProceso}` : String(filaAcumulada + 1);
+      etiquetaProceso.style.gridColumn = "1";
+      grilla.appendChild(etiquetaProceso);
+      filaAcumulada += cantidadFilasProceso;
+    });
 
-      if (columnaExtra) {
+    carriles.forEach((carril, indiceCarril) => {
+      // Columna 2: TODOS los hilos muestran acá su propio nombre — ninguno
+      // tiene trato especial.
+      const etiquetaHilo = document.createElement("div");
+      etiquetaHilo.className = "etiqueta-hilo";
+      etiquetaHilo.textContent = carril.etiqueta;
+      etiquetaHilo.style.gridRow = String(indiceCarril + 1);
+      etiquetaHilo.style.gridColumn = "2";
+      grilla.appendChild(etiquetaHilo);
+
+      // La columna extra (estimación inicial, prioridad) es una propiedad
+      // del PROCESO, no de cada hilo — se muestra una sola vez, en la fila
+      // del primer hilo, no repetida en cada uno.
+      if (columnaExtra && carril.esPrimerHiloDelProceso) {
         const celdaExtra = document.createElement("div");
         celdaExtra.className = "celda-extra-grilla";
-        celdaExtra.style.gridRow = String(indiceProceso + 1);
-        celdaExtra.style.gridColumn = "2";
+        celdaExtra.style.gridRow = String(indiceCarril + 1);
+        celdaExtra.style.gridColumn = "3";
 
         const input = document.createElement("input");
         input.type = "number";
         input.min = "1";
-        input.value = columnaExtra.obtenerValor(proceso.id);
+        input.value = columnaExtra.obtenerValor(carril.procesoId);
         input.addEventListener("change", () => {
-          columnaExtra.onCambio(proceso.id, Number(input.value) || 0);
+          columnaExtra.onCambio(carril.procesoId, Number(input.value) || 0);
         });
         celdaExtra.appendChild(input);
         grilla.appendChild(celdaExtra);
@@ -240,7 +316,7 @@ const GrillaGantt = (function () {
 
     // La fila de "cola armada a mano" solo existe en la grilla editable —
     // es donde vive el editor de colas por instante (ver más abajo).
-    const filaCola = procesos.length + 2;
+    const filaCola = carriles.length + 2;
     const colaPorInstante = [];
     const celdasColaPorInstante = [];
 
@@ -249,7 +325,7 @@ const GrillaGantt = (function () {
       etiquetaCola.className = "etiqueta-cola-listos";
       etiquetaCola.textContent = "Cola";
       etiquetaCola.style.gridRow = String(filaCola);
-      etiquetaCola.style.gridColumn = "1";
+      etiquetaCola.style.gridColumn = "1 / span 2";
       grilla.appendChild(etiquetaCola);
     }
 
@@ -394,7 +470,8 @@ const GrillaGantt = (function () {
     let etiquetaColumnaExtra = null;
 
     function actualizarPlantillaColumnas() {
-      const columnaEtiqueta = columnaExtra ? `${ANCHO_COLUMNA_ETIQUETA} ${ANCHO_COLUMNA_EXTRA}` : ANCHO_COLUMNA_ETIQUETA;
+      const columnasEtiqueta = `${ANCHO_COLUMNA_PROCESO} ${ANCHO_COLUMNA_HILO}`;
+      const columnaEtiqueta = columnaExtra ? `${columnasEtiqueta} ${ANCHO_COLUMNA_EXTRA}` : columnasEtiqueta;
       grilla.style.gridTemplateColumns = `${columnaEtiqueta} repeat(${duracionActual}, minmax(${ANCHO_MINIMO_COLUMNA}, 1fr))`;
     }
 
@@ -402,7 +479,7 @@ const GrillaGantt = (function () {
       if (eje) eje.remove();
       eje = document.createElement("div");
       eje.className = "fila-eje-instantes";
-      eje.style.gridRow = String(procesos.length + 1);
+      eje.style.gridRow = String(carriles.length + 1);
       eje.style.gridColumn = `${columnaInicioInstantes} / span ${duracionActual}`;
       for (let t = 0; t <= duracionActual; t++) {
         const marca = document.createElement("span");
@@ -422,8 +499,8 @@ const GrillaGantt = (function () {
         etiquetaColumnaExtra = document.createElement("div");
         etiquetaColumnaExtra.className = "etiqueta-columna-extra";
         etiquetaColumnaExtra.textContent = columnaExtra.encabezado;
-        etiquetaColumnaExtra.style.gridRow = String(procesos.length + 1);
-        etiquetaColumnaExtra.style.gridColumn = "2";
+        etiquetaColumnaExtra.style.gridRow = String(carriles.length + 1);
+        etiquetaColumnaExtra.style.gridColumn = "3";
         grilla.appendChild(etiquetaColumnaExtra);
       }
     }
@@ -437,35 +514,36 @@ const GrillaGantt = (function () {
       const celdasDeLaColumna = [];
       celdasPorInstante.push(celdasDeLaColumna);
 
-      procesos.forEach((proceso, indiceProceso) => {
+      carriles.forEach((carril, indiceCarril) => {
         const celda = document.createElement("div");
         celda.className = "celda-proceso celda-vacia";
         celda.dataset.estado = "";
-        celda.dataset.proceso = proceso.id;
+        celda.dataset.proceso = carril.id;
         celda.dataset.instante = String(t);
-        celda.style.gridRow = String(indiceProceso + 1);
+        celda.style.gridRow = String(indiceCarril + 1);
         celda.style.gridColumn = String(columnaInicioInstantes + t);
 
-        const valorInicial = datosPorProceso ? datosPorProceso[proceso.id][t] : null;
+        const valorInicial = datosPorProceso ? datosPorProceso[carril.id][t] : null;
         if (valorInicial) aplicarEstadoCelda(celda, valorInicial, coloresProcesos);
 
         // Solo en grillas de solo lectura: si el algoritmo expone una
         // "razón" para esta celda de ejecución puntual (hoy solo SRTF, con
         // el restante estimado que se comparó contra la cola en ESE tick),
-        // se lo mostramos como tooltip al pasar el mouse.
-        const tooltip = tooltipsPorProceso && tooltipsPorProceso[proceso.id] && tooltipsPorProceso[proceso.id][t];
+        // se lo mostramos como tooltip al pasar el mouse. Ningún algoritmo
+        // conoce hilos todavía, así que esto nunca aplica a filas de hilo.
+        const tooltip = tooltipsPorProceso && tooltipsPorProceso[carril.id] && tooltipsPorProceso[carril.id][t];
         if (tooltip) aplicarTooltip(celda, tooltip);
 
         // También solo en grillas de solo lectura: marca en la ÚLTIMA celda
         // de cada tramo de CPU por qué terminó (ver construirMarcadoresTransicion).
-        const razonTransicion = marcadoresPorProceso && marcadoresPorProceso[proceso.id] && marcadoresPorProceso[proceso.id][t];
+        const razonTransicion = marcadoresPorProceso && marcadoresPorProceso[carril.id] && marcadoresPorProceso[carril.id][t];
         if (razonTransicion) aplicarMarcadorTransicion(celda, razonTransicion);
 
         if (editable) habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos);
 
         grilla.appendChild(celda);
         celdasDeLaColumna.push(celda);
-        celdasPorProceso[proceso.id].push(celda);
+        celdasPorProceso[carril.id].push(celda);
       });
 
       if (editable) {
@@ -509,8 +587,12 @@ const GrillaGantt = (function () {
       elemento: grilla,
       obtenerRespuesta: () => {
         const respuesta = {};
-        procesos.forEach((proceso) => {
-          respuesta[proceso.id] = celdasPorProceso[proceso.id].map((c) => c.dataset.estado || null);
+        // Se devuelve una entrada por CARRIL (incluye hilos), pero el
+        // corrector solo mira las claves que coinciden con `proceso.id` —
+        // las de hilos quedan ahí para que el alumno las use como espacio
+        // libre, sin que nada las exija ni las corrija.
+        carriles.forEach((carril) => {
+          respuesta[carril.id] = celdasPorProceso[carril.id].map((c) => c.dataset.estado || null);
         });
         return respuesta;
       },
@@ -532,6 +614,9 @@ const GrillaGantt = (function () {
       asegurarDuracionMinima: (minimo) => {
         while (duracionActual < minimo) agregarColumna();
       },
+      /** Cantidad de filas (carriles) que tiene la grilla — la usa `renderizarGrillaSolucion`
+       * para saber en qué fila arrancar las filas extra de cola de listos. */
+      cantidadCarriles: carriles.length,
     };
   }
 
@@ -551,7 +636,7 @@ const GrillaGantt = (function () {
     celda.className = "etiqueta-cola-listos";
     celda.textContent = texto;
     celda.style.gridRow = String(fila);
-    celda.style.gridColumn = "1";
+    celda.style.gridColumn = "1 / span 2";
     return celda;
   }
 
@@ -647,7 +732,12 @@ const GrillaGantt = (function () {
     let tooltipsPorProceso = null;
     if (formatearTooltipEjecucion && resultado.infoEjecucionPorInstante) {
       tooltipsPorProceso = {};
-      procesos.forEach((p) => (tooltipsPorProceso[p.id] = new Array(duracionTotal).fill(null)));
+      // Ojo: se indexa por CARRIL (no por proceso.id) porque, con hilos, la
+      // celda que efectivamente ejecuta puede ser la de un hilo puntual
+      // (ver simulador-core.js/idEjecutable) — si solo se pre-inicializara
+      // para `procesos`, asignarle un tooltip a la fila de un hilo tiraría
+      // error (no existiría ese array todavía).
+      construirCarriles(procesos).forEach((c) => (tooltipsPorProceso[c.id] = new Array(duracionTotal).fill(null)));
       for (let t = 0; t < duracionTotal; t++) {
         const infoDelInstante = resultado.infoEjecucionPorInstante[t];
         if (!infoDelInstante) continue;
@@ -677,8 +767,8 @@ const GrillaGantt = (function () {
     if (!controlador || !modo || modo === "ninguno") return;
 
     const grilla = controlador.elemento;
-    const filaBase = procesos.length + 2; // fila 1..N = procesos, N+1 = eje de instantes
-    const columnaInicioInstantes = columnaExtra ? 3 : 2;
+    const filaBase = controlador.cantidadCarriles + 2; // fila 1..N = carriles (procesos + hilos), N+1 = eje de instantes
+    const columnaInicioInstantes = columnaExtra ? 4 : 3;
 
     if (modo === "simple") {
       const formatearTooltip = opciones && opciones.formatearTooltipListos;
@@ -712,6 +802,7 @@ const GrillaGantt = (function () {
 
   return {
     asignarColoresProcesos,
+    construirCarriles,
     construirDatosPorProceso,
     crearGrillaInteractiva,
     renderizarGrillaSolucion,

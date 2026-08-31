@@ -28,8 +28,14 @@
   --proceso-color-8: #e34948;
 }
 
+/* Modo oscuro: por defecto del sistema operativo/navegador (media query),
+   pero el botón de "Modo claro/oscuro" del header puede pisar esa elección
+   con un data-theme explícito en <html> (ver main.js) — por eso la media
+   query está resguardada con :not([data-theme="light"]), y hay un bloque
+   aparte para data-theme="dark" que aplica incluso si el sistema está en
+   claro. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --superficie: #1a1a19;
     --plano-pagina: #0d0d0d;
@@ -52,6 +58,30 @@
     --proceso-color-7: #9085e9;
     --proceso-color-8: #e66767;
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --superficie: #1a1a19;
+  --plano-pagina: #0d0d0d;
+  --tinta-primaria: #ffffff;
+  --tinta-secundaria: #c3c2b7;
+  --tinta-muted: #898781;
+  --linea-sutil: #2c2c2a;
+  --linea-base: #383835;
+  --borde: rgba(255, 255, 255, 0.1);
+
+  --color-exito: #0ca30c;
+  --color-error: #e66767;
+
+  --proceso-color-1: #3987e5;
+  --proceso-color-2: #d95926;
+  --proceso-color-3: #199e70;
+  --proceso-color-4: #c98500;
+  --proceso-color-5: #d55181;
+  --proceso-color-6: #008300;
+  --proceso-color-7: #9085e9;
+  --proceso-color-8: #e66767;
 }
 
 * {
@@ -101,14 +131,27 @@ input, select {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.5rem;
+  padding: 0.5rem 1.5rem;
   background: var(--superficie);
   border-bottom: 1px solid var(--linea-sutil);
 }
 
 .acciones-globales {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
+}
+
+#boton-tema {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  border-radius: 999px;
 }
 
 main {
@@ -116,7 +159,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  max-width: 1100px;
+  max-width: 1400px;
   margin: 0 auto;
 }
 
@@ -218,6 +261,71 @@ main {
 .boton-eliminar-proceso {
   color: var(--color-error);
   border-color: var(--color-error);
+}
+
+/* ---------------------------------------------------------------------
+   Hilos (dentro de la tabla de procesos)
+--------------------------------------------------------------------- */
+.fila-hilo {
+  background: color-mix(in srgb, var(--tinta-muted) 4%, transparent);
+}
+
+.celda-acciones-proceso {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.boton-agregar-hilo {
+  font-size: 0.8rem;
+}
+
+.boton-eliminar-hilo {
+  font-size: 0.8rem;
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.celda-tipo-hilo {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.input-id-hilo {
+  width: 3.2rem;
+  font-weight: 600;
+}
+
+/* Un solo botón que alterna KLT ↔ ULT al tocarlo (en vez de un selector de
+   dos opciones) — ahorra espacio en la tabla. */
+.boton-tipo-hilo {
+  min-width: 2.6rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: white;
+  border: none;
+}
+
+.boton-tipo-hilo-klt {
+  background: var(--proceso-color-1);
+}
+
+.boton-tipo-hilo-ult {
+  background: var(--proceso-color-7);
+}
+
+.fila-biblioteca-ult {
+  background: color-mix(in srgb, var(--proceso-color-1) 6%, transparent);
+}
+
+.celda-biblioteca-ult {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--tinta-secundaria);
 }
 
 /* ---------------------------------------------------------------------
@@ -331,12 +439,31 @@ main {
   padding: 2px;
 }
 
+/* Columna 1 del Gantt: el proceso. Cuando tiene hilos, ocupa varias filas
+   de grid (grid-row en span, ver ui/grilla-gantt.js) — por eso se centra
+   verticalmente, para quedar a la altura de todas las filas que cubre. */
 .etiqueta-proceso {
   display: flex;
   align-items: center;
-  padding: 0 0.5rem;
+  justify-content: center;
+  padding: 0 0.4rem;
   font-weight: 700;
   font-size: 0.85rem;
+  background: var(--superficie);
+  border-radius: 3px;
+  text-align: center;
+}
+
+/* Columna 2 del Gantt: el hilo. Solo tiene contenido en las filas de hilos
+   agregados — el hilo principal no repite acá el nombre del proceso, que
+   ya se ve (y cubre esa fila) en la columna 1. */
+.etiqueta-hilo {
+  display: flex;
+  align-items: center;
+  padding: 0 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--tinta-secundaria);
   background: var(--superficie);
   border-radius: 3px;
 }

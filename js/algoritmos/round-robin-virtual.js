@@ -47,9 +47,12 @@ function simularRoundRobinVirtual(procesos, opciones) {
   const esDeReingreso = (e) => e.motivoIngreso === "io";
 
   while (estados.some((e) => e.estado !== "terminado") && instante < LIMITE_SEGURIDAD) {
-    // 1) Arribos nuevos en este instante (van a la cola normal).
+    // 1) Arribos nuevos en este instante (van a la cola normal). Las
+    //    unidades compuestas (grupos ULT) se resuelven aparte, en el MISMO
+    //    recorrido (ver el mismo comentario en simulador-core.js).
     estados.forEach((e) => {
-      if (e.estado === "nuevo" && e.arribo === instante) marcarListo(e, "arribo");
+      if (e.esCompuesta) SimuladorCore.resolverArriboDeCompuesta(e, instante, marcarListo);
+      else if (e.estado === "nuevo" && e.arribo === instante) marcarListo(e, "arribo");
     });
 
     // 2) Selección: la cola de reingreso (vuelven de IO) tiene prioridad
@@ -118,7 +121,7 @@ function simularRoundRobinVirtual(procesos, opciones) {
       const e = procesoEjecutando;
       const rafagaActual = e.rafagas[e.indiceRafaga];
       rafagaActual.restante -= 1;
-      gantt.push({ proceso: e.id, inicio: instante, fin: instante + 1, tipo: "CPU" });
+      gantt.push({ proceso: SimuladorCore.idEjecutable(e), inicio: instante, fin: instante + 1, tipo: "CPU" });
       e.quantumRestante -= 1;
 
       const terminoRafaga = rafagaActual.restante === 0;
@@ -139,21 +142,40 @@ function simularRoundRobinVirtual(procesos, opciones) {
     // 5) Resolver, ya en el nuevo instante, la transición del proceso que ocupó la CPU.
     if (transicion === "fin-rafaga") {
       const e = procesoEjecutando;
-      e.indiceRafaga += 1;
-      if (e.indiceRafaga >= e.rafagas.length) {
-        e.estado = "terminado";
-        e.instanteTerminacion = instante;
-        e.quantumRestante = null;
+      if (e.esCompuesta) {
+        // Grupo de hilos ULT: igual criterio que en simulador-core.js — si
+        // otro hilo del mismo proceso puede seguir de inmediato, el SO ni
+        // se entera (no pasa por el planificador ni toca el quantum).
+        const resultado = SimuladorCore.resolverFinRafagaCompuesta(e, dispositivoIO, instante, franjasIO, null, null);
+        if (resultado === "terminada") {
+          e.estado = "terminado";
+          e.instanteTerminacion = instante;
+          e.quantumRestante = null;
+          procesoEjecutando = null;
+        } else if (resultado === "vacia") {
+          e.estado = "esperando-miembros";
+          // No se resetea quantumRestante: igual que con una IO simple, se
+          // conserva para cuando reingrese por la cola de reingreso.
+          procesoEjecutando = null;
+        }
+        // "sigue": no se toca procesoEjecutando ni quantumRestante.
       } else {
-        const siguiente = e.rafagas[e.indiceRafaga];
-        const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
-        e.estado = "io";
-        e.instanteFinIO = fin;
-        franjasIO.push({ proceso: e.id, inicio, fin });
-        // No se resetea quantumRestante: es justamente lo que se "descuenta"
-        // y se conserva para cuando reingrese por la cola de reingreso.
+        e.indiceRafaga += 1;
+        if (e.indiceRafaga >= e.rafagas.length) {
+          e.estado = "terminado";
+          e.instanteTerminacion = instante;
+          e.quantumRestante = null;
+        } else {
+          const siguiente = e.rafagas[e.indiceRafaga];
+          const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
+          e.estado = "io";
+          e.instanteFinIO = fin;
+          franjasIO.push({ proceso: e.id, inicio, fin });
+          // No se resetea quantumRestante: es justamente lo que se "descuenta"
+          // y se conserva para cuando reingrese por la cola de reingreso.
+        }
+        procesoEjecutando = null;
       }
-      procesoEjecutando = null;
     } else if (transicion === "fin-quantum") {
       marcarListo(procesoEjecutando, "desalojado");
       procesoEjecutando.quantumRestante = null; // vuelve por la cola normal -> quantum nuevo la próxima vez
@@ -176,6 +198,7 @@ function simularRoundRobinVirtual(procesos, opciones) {
         }
       }
     });
+    SimuladorCore.resolverRetornosDeIOCompuestos(estados, instante, marcarListo);
   }
 
   return {

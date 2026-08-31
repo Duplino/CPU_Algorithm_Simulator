@@ -172,13 +172,16 @@
   // "Tu Solución": la única grilla interactiva, independiente del algoritmo
   // ----------------------------------------------------------------------
 
-  /** Duración inicial razonable: el trabajo total del proceso más largo, sin esperas. */
+  /** Duración inicial razonable: el trabajo total del hilo más largo, sin esperas. */
   function calcularDuracionInicialSugerida(procesos) {
     if (procesos.length === 0) return 1;
-    return Math.max(
-      1,
-      ...procesos.map((p) => p.arribo + p.rafagas.reduce((acc, r) => acc + r.duracion, 0))
-    );
+    const finesHilos = [];
+    procesos.forEach((p) => {
+      p.hilos.forEach((h) => {
+        finesHilos.push(h.arribo + h.rafagas.reduce((acc, r) => acc + r.duracion, 0));
+      });
+    });
+    return Math.max(1, ...finesHilos);
   }
 
   function renderizarSeccionSolucion() {
@@ -371,6 +374,32 @@
     };
   }
 
+  /**
+   * Config de la columna extra de prioridad (mismo mecanismo que la
+   * estimación de arriba): la prioridad ya no se edita en la tabla de
+   * "Procesos" — solo la usan Prioridad y Prioridad expropiativa, así que
+   * vive en SUS tarjetas. A diferencia de la estimación, siempre está
+   * presente en esas dos tarjetas (no hay toggle: esos algoritmos no
+   * funcionan sin prioridad).
+   */
+  function construirColumnaExtraPrioridad() {
+    return {
+      encabezado: "Prior.",
+      obtenerValor: (procesoId) => {
+        const proceso = estado.procesos.find((p) => p.id === procesoId);
+        return proceso.prioridad;
+      },
+      onCambio: (procesoId, nuevoValor) => {
+        const proceso = estado.procesos.find((p) => p.id === procesoId);
+        proceso.prioridad = nuevoValor || 0;
+        // Igual que con la estimación: la prioridad es por proceso, así que
+        // sincroniza ambas tarjetas (Prioridad y Prioridad expropiativa) si
+        // las dos están agregadas.
+        recalcularTodosLosBloques();
+      },
+    };
+  }
+
   function construirContenidoAlgoritmoSimulado(contenedor, bloque) {
     const areaGrillaSolucion = document.createElement("div");
     areaGrillaSolucion.className = "area-grilla-solucion";
@@ -411,16 +440,22 @@
     ejecutarYRenderizarBloque(bloque);
   }
 
+  const ALGORITMOS_CON_PRIORIDAD = new Set(["prioridad", "prioridad-expropiativa"]);
+
   function ejecutarYRenderizarBloque(bloque) {
     if (estado.procesos.length === 0 || !bloque._refs) return;
 
     const definicion = REGISTRO_ALGORITMOS[bloque.algoritmo];
     bloque.resultadoActual = definicion.simular(estado.procesos, bloque.parametros);
 
+    let columnaExtra = null;
+    if (bloque.parametros.estimacion) columnaExtra = construirColumnaExtraEstimacion();
+    else if (ALGORITMOS_CON_PRIORIDAD.has(bloque.algoritmo)) columnaExtra = construirColumnaExtraPrioridad();
+
     const colores = GrillaGantt.asignarColoresProcesos(estado.procesos);
     GrillaGantt.renderizarGrillaSolucion(bloque._refs.areaGrillaSolucion, estado.procesos, bloque.resultadoActual, colores, {
       modo: definicion.modoColaListos,
-      columnaExtra: bloque.parametros.estimacion ? construirColumnaExtraEstimacion() : null,
+      columnaExtra,
       formatearTooltipListos: definicion.formatearTooltipListos,
       formatearTooltipEjecucion: definicion.formatearTooltipEjecucion,
     });
@@ -472,7 +507,19 @@
       const respuesta = await fetch("data/ejercicios-ejemplo.json");
       const datos = await respuesta.json();
       const ejemplo = datos.ejercicios[0];
-      cargarProcesos(ejemplo.procesos.map((p) => ({ ...p, hilos: [] })));
+      // Los ejercicios de ejemplo se guardan en el formato "plano" de antes
+      // (arribo/ráfagas propios del proceso): se adaptan acá al formato
+      // actual, donde toda ejecución vive en `hilos[]` — este pasa a ser su
+      // único hilo ("1"), sin trato especial.
+      cargarProcesos(
+        ejemplo.procesos.map((p) => ({
+          id: p.id,
+          prioridad: p.prioridad,
+          estimacionInicial: p.estimacionInicial,
+          algoritmoBiblioteca: null,
+          hilos: [{ id: "1", tipo: "KLT", arribo: p.arribo, rafagas: p.rafagas }],
+        }))
+      );
     } catch (error) {
       alert("No se pudo cargar el ejemplo (¿estás sirviendo el proyecto con un servidor local?).");
     }
@@ -481,7 +528,7 @@
   function generarAleatorio() {
     const cantidad = 3 + Math.floor(Math.random() * 3); // entre 3 y 5 procesos
     const procesos = [];
-    for (let i = 1; i <= cantidad; i++) {
+    for (let i = 0; i < cantidad; i++) {
       const rafagas = [{ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 6) }];
       if (Math.random() > 0.4) {
         rafagas.push({ tipo: "IO", duracion: 1 + Math.floor(Math.random() * 4) });
@@ -492,15 +539,47 @@
         rafagas.push({ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 4) });
       }
       procesos.push({
-        id: `P${i}`,
-        arribo: Math.floor(Math.random() * 5),
+        id: EditorProcesos.letraDesdeIndice(i),
         prioridad: 1 + Math.floor(Math.random() * 5),
-        rafagas,
         estimacionInicial: null,
-        hilos: [],
+        algoritmoBiblioteca: null,
+        hilos: [{ id: "1", tipo: "KLT", arribo: Math.floor(Math.random() * 5), rafagas }],
       });
     }
     cargarProcesos(procesos);
+  }
+
+  // ----------------------------------------------------------------------
+  // Modo claro/oscuro
+  // ----------------------------------------------------------------------
+
+  /** Tema visual efectivo ahora mismo: el explícito guardado, o si no hay, el del sistema. */
+  function temaActual() {
+    return (
+      document.documentElement.dataset.theme ||
+      (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    );
+  }
+
+  function actualizarBotonTema(boton) {
+    const esOscuro = temaActual() === "dark";
+    boton.textContent = esOscuro ? "☀️" : "🌙";
+    boton.setAttribute("aria-label", esOscuro ? "Cambiar a modo claro" : "Cambiar a modo oscuro");
+  }
+
+  function inicializarTema() {
+    const boton = document.getElementById("boton-tema");
+    actualizarBotonTema(boton);
+    boton.addEventListener("click", () => {
+      const nuevoTema = temaActual() === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = nuevoTema;
+      try {
+        localStorage.setItem("tema", nuevoTema);
+      } catch (error) {
+        // Sin localStorage disponible, el tema elegido no persiste entre recargas — no es grave.
+      }
+      actualizarBotonTema(boton);
+    });
   }
 
   // ----------------------------------------------------------------------
@@ -508,14 +587,14 @@
   // ----------------------------------------------------------------------
 
   function inicializar() {
+    inicializarTema();
     document.getElementById("boton-cargar-ejemplo").addEventListener("click", cargarEjemplo);
     document.getElementById("boton-generar-aleatorio").addEventListener("click", generarAleatorio);
     document.getElementById("boton-agregar-bloque").addEventListener("click", agregarBloque);
 
-    cargarProcesos([
-      EditorProcesos.crearProcesoVacio("P1"),
-      { ...EditorProcesos.crearProcesoVacio("P2"), arribo: 1 },
-    ]);
+    const b = EditorProcesos.crearProcesoVacio("B");
+    b.hilos[0].arribo = 1;
+    cargarProcesos([EditorProcesos.crearProcesoVacio("A"), b]);
     agregarBloque();
   }
 

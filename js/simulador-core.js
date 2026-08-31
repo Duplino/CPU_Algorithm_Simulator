@@ -97,32 +97,324 @@ const SimuladorCore = (function () {
   }
 
   /**
-   * Construye el estado interno inicial de cada proceso a partir de los
-   * datos que ingresa el usuario. No muta los procesos originales.
+   * A partir de los procesos que cargó el usuario, arma la lista de
+   * UNIDADES PLANIFICABLES que realmente compiten por la CPU — no siempre
+   * es "una por hilo": depende de cómo esté configurado cada uno (ver
+   * editor-procesos.js y la fila "Biblioteca ULT"). Ningún hilo tiene
+   * trato especial (no existe un "hilo principal" para el motor): TODOS
+   * los hilos de `proceso.hilos[]` se recorren de la misma manera.
+   *
+   *   - Un hilo KLT es una unidad independiente: el SO lo ve y lo
+   *     planifica exactamente como si fuera un proceso más — con SU
+   *     PROPIO arribo, que puede ser distinto al de otros hilos del mismo
+   *     proceso (ej. un hilo que se crea recién cuando el proceso ya lleva
+   *     un rato corriendo).
+   *   - Los hilos ULT de UN MISMO proceso comparten una única unidad
+   *     COMPUESTA: el SO solo ve y planifica al proceso como un todo, y
+   *     mientras lo tiene, la biblioteca ULT decide internamente (round
+   *     robin simple entre sus hilos ULT listos) cuál ejecuta. Gracias a
+   *     que la biblioteca usa Jacketing o llamadas no bloqueantes, un hilo
+   *     ULT que pide IO no bloquea a sus hermanos: la unidad compuesta
+   *     sigue lista mientras tenga al menos un hilo ULT sin IO pendiente.
+   *     Como cada miembro también puede tener su propio arribo, la unidad
+   *     compuesta "arriba" por primera vez con el MÁS TEMPRANO de sus
+   *     miembros — el resto se suma al grupo más tarde, en su propio
+   *     instante (ver resolverArriboDeCompuesta).
+   *
+   * El `id` de cada unidad simple es el mismo que usa el Gantt para esa
+   * fila (`proceso.id + "." + hilo.id` — ver ui/grilla-gantt.js/
+   * construirCarriles), así que el resto del motor no necesita saber nada
+   * de hilos: solo mete los eventos de CPU/IO en el `id` que corresponda.
+   * Una unidad COMPUESTA no tiene fila propia en el Gantt (no representa a
+   * un hilo puntual): usa `proceso.id + ".ult"`.
+   */
+  function construirUnidadesPlanificables(procesos) {
+    const unidades = [];
+    procesos.forEach((proceso) => {
+      const miembrosULT = [];
+
+      proceso.hilos.forEach((hilo) => {
+        const idHilo = `${proceso.id}.${hilo.id}`;
+        if (hilo.tipo === "ULT") {
+          miembrosULT.push({ id: idHilo, arribo: hilo.arribo, rafagas: hilo.rafagas });
+        } else {
+          unidades.push({
+            id: idHilo,
+            arribo: hilo.arribo,
+            proceso,
+            rafagas: hilo.rafagas,
+            miembros: null,
+          });
+        }
+      });
+
+      if (miembrosULT.length > 0) {
+        unidades.push({
+          id: `${proceso.id}.ult`,
+          // La unidad compuesta "arriba" con el más temprano de sus
+          // miembros — los demás se suman al grupo más tarde (ver
+          // resolverArriboDeCompuesta).
+          arribo: Math.min(...miembrosULT.map((m) => m.arribo)),
+          proceso,
+          rafagas: null,
+          miembros: miembrosULT,
+        });
+      }
+    });
+    return unidades;
+  }
+
+  function copiarRafagasConRestante(rafagas) {
+    return rafagas.map((r) => ({ tipo: r.tipo, duracion: r.duracion, restante: r.duracion }));
+  }
+
+  /** Misma lógica de "estimación inicial efectiva" que EditorProcesos.estimacionEfectiva, pero acá no se puede importar ese módulo (orden de carga de <script>), así que se repite. */
+  function estimacionInicialPara(proceso, rafagasDeReferencia) {
+    if (proceso.estimacionInicial != null) return proceso.estimacionInicial;
+    const primeraCPU = rafagasDeReferencia.find((r) => r.tipo === "CPU");
+    return primeraCPU ? primeraCPU.duracion : 0;
+  }
+
+  /**
+   * Construye el estado interno inicial de cada UNIDAD planificable (ver
+   * construirUnidadesPlanificables) a partir de los procesos que ingresó
+   * el usuario. No muta los procesos originales.
+   *
+   * Una unidad COMPUESTA (grupo de hilos ULT) guarda el progreso de CADA
+   * miembro por separado (`miembros`), pero además expone `rafagas` /
+   * `indiceRafaga` "espejados" desde el miembro activo (`miembroActivoId`)
+   * — son la MISMA referencia (no una copia), así que el resto del motor
+   * (que no sabe nada de hilos: solo descuenta `rafagas[indiceRafaga].restante`)
+   * puede tratar a esta unidad exactamente como a una simple. Cuando el
+   * miembro activo cambia (ver resolverFinRafagaCompuesta), esos dos campos
+   * se reapuntan al nuevo miembro.
    */
   function crearEstadoInicial(procesos) {
-    return procesos.map((p) => ({
-      id: p.id,
-      arribo: p.arribo,
-      prioridad: p.prioridad,
-      // Copia profunda de las ráfagas, agregando un contador de "restante"
-      // que se va descontando durante la simulación.
-      rafagas: p.rafagas.map((r) => ({ tipo: r.tipo, duracion: r.duracion, restante: r.duracion })),
-      indiceRafaga: 0,
-      estado: "nuevo", // nuevo -> listo -> ejecutando -> io -> listo -> ... -> terminado
-      motivoIngreso: null,
-      ordenEncolado: null,
-      instanteEntradaAListos: null,
-      quantumRestante: null,
-      instanteFinIO: null,
-      primeraEjecucion: null,
-      instanteTerminacion: null,
-      estimacionRafagaActual:
-        p.estimacionInicial != null
-          ? p.estimacionInicial
-          : (p.rafagas.find((r) => r.tipo === "CPU") || { duracion: 0 }).duracion,
-      ticksListo: 0,
-    }));
+    const unidades = construirUnidadesPlanificables(procesos);
+    return unidades.map((u) => {
+      const base = {
+        id: u.id,
+        arribo: u.arribo,
+        prioridad: u.proceso.prioridad,
+        estado: "nuevo", // nuevo -> listo -> ejecutando -> io|esperando-miembros -> listo -> ... -> terminado
+        motivoIngreso: null,
+        ordenEncolado: null,
+        instanteEntradaAListos: null,
+        quantumRestante: null,
+        instanteFinIO: null,
+        primeraEjecucion: null,
+        instanteTerminacion: null,
+        ticksListo: 0,
+      };
+
+      if (!u.miembros) {
+        const rafagas = copiarRafagasConRestante(u.rafagas);
+        return {
+          ...base,
+          esCompuesta: false,
+          rafagas,
+          indiceRafaga: 0,
+          estimacionRafagaActual: estimacionInicialPara(u.proceso, rafagas),
+        };
+      }
+
+      // Todos los miembros arrancan "no-llegado": ninguno se activa acá
+      // directamente (ni siquiera el que arriba en el instante 0) — eso lo
+      // resuelve resolverArribosDeMiembros en su primer tick, exactamente
+      // igual que una unidad simple no queda "lista" hasta que el motor
+      // procesa su arribo (ver el paso 1 de simularPorInstantes).
+      const miembros = u.miembros.map((m) => ({
+        id: m.id,
+        arribo: m.arribo,
+        rafagas: copiarRafagasConRestante(m.rafagas),
+        indiceRafaga: 0,
+        estado: "no-llegado", // no-llegado | listo | io | terminado
+        instanteFinIO: null,
+      }));
+      // Placeholder inicial e inerte: nada lo lee hasta que la unidad
+      // compuesta deja de estar "nuevo" (resolverArribosDeMiembros
+      // reasigna el miembro activo de verdad en ese momento).
+      const activo = miembros[0];
+      return {
+        ...base,
+        esCompuesta: true,
+        miembros,
+        miembroActivoId: activo.id,
+        rafagas: activo.rafagas,
+        indiceRafaga: activo.indiceRafaga,
+        estimacionRafagaActual: estimacionInicialPara(u.proceso, activo.rafagas),
+      };
+    });
+  }
+
+  /** El id que realmente hay que anotar en el Gantt/franjas de IO: el de la unidad misma, o el del miembro activo si es una unidad compuesta. */
+  function idEjecutable(estadoUnidad) {
+    return estadoUnidad.esCompuesta ? estadoUnidad.miembroActivoId : estadoUnidad.id;
+  }
+
+  /**
+   * Dentro de una unidad compuesta (grupo de hilos ULT), elige el próximo
+   * miembro LISTO por round robin simple, empezando después del que estaba
+   * activo — o null si ninguno lo está. No es una política real de
+   * scheduling de las que enseña la cátedra (esa decisión es 100% interna
+   * de la biblioteca ULT, invisible para el SO), así que un orden simple
+   * alcanza.
+   */
+  function elegirSiguienteMiembroListo(estadoCompuesto) {
+    const miembros = estadoCompuesto.miembros;
+    const indiceActual = miembros.findIndex((m) => m.id === estadoCompuesto.miembroActivoId);
+    for (let paso = 1; paso <= miembros.length; paso++) {
+      const candidato = miembros[(indiceActual + paso) % miembros.length];
+      if (candidato.estado === "listo") return candidato;
+    }
+    return null;
+  }
+
+  function activarMiembro(estadoCompuesto, miembro) {
+    estadoCompuesto.miembroActivoId = miembro.id;
+    estadoCompuesto.rafagas = miembro.rafagas;
+    estadoCompuesto.indiceRafaga = miembro.indiceRafaga;
+  }
+
+  /**
+   * Resuelve el fin de la ráfaga de CPU del miembro ACTIVO de una unidad
+   * compuesta (grupo ULT) — análogo a la resolución de "fin-rafaga" de una
+   * unidad simple, pero además decide, antes de devolverle el control al
+   * planificador externo, si otro hilo ULT del mismo proceso puede seguir
+   * usando la CPU de inmediato. Ese cambio interno es INVISIBLE para el
+   * SO: no cuenta como un nuevo ingreso a listos ni resetea el quantum —
+   * de eso se ocupa quien llama a esta función, no ella (ver
+   * simularPorInstantes y round-robin-virtual.js, que manejan el quantum
+   * de manera distinta entre sí).
+   *
+   * @returns {"sigue"|"vacia"|"terminada"} — "sigue": la unidad compuesta
+   *          sigue ejecutando (otro miembro tomó la posta). "vacia":
+   *          ningún miembro está listo ahora mismo (puede volver a estarlo
+   *          más adelante, cuando alguno vuelva de IO). "terminada": todos
+   *          los miembros terminaron.
+   */
+  function resolverFinRafagaCompuesta(estadoCompuesto, dispositivoIO, instante, franjasIO, actualizarEstimacion, duracionRafagaQueTermino) {
+    const miembro = estadoCompuesto.miembros.find((m) => m.id === estadoCompuesto.miembroActivoId);
+    if (actualizarEstimacion) {
+      estadoCompuesto.estimacionRafagaActual = actualizarEstimacion(estadoCompuesto, duracionRafagaQueTermino);
+    }
+    miembro.indiceRafaga = estadoCompuesto.indiceRafaga + 1;
+
+    if (miembro.indiceRafaga >= miembro.rafagas.length) {
+      miembro.estado = "terminado";
+    } else {
+      const siguiente = miembro.rafagas[miembro.indiceRafaga];
+      const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
+      miembro.estado = "io";
+      miembro.instanteFinIO = fin;
+      franjasIO.push({ proceso: miembro.id, inicio, fin });
+    }
+
+    const siguienteActivo = elegirSiguienteMiembroListo(estadoCompuesto);
+    if (siguienteActivo) {
+      activarMiembro(estadoCompuesto, siguienteActivo);
+      return "sigue";
+    }
+    return estadoCompuesto.miembros.every((m) => m.estado === "terminado") ? "terminada" : "vacia";
+  }
+
+  /**
+   * Análogo, para unidades compuestas (grupos ULT), del paso que hace
+   * pasar a "listo" a quien arriba en este instante (ver el mismo paso
+   * para unidades simples en simularPorInstantes) — pero acá hay que
+   * revisar cada MIEMBRO por separado, porque no todos tienen por qué
+   * arribar junto con la unidad compuesta (el primero en llegar es el que
+   * determina el arribo "oficial" de la unidad — ver
+   * construirUnidadesPlanificables — y los demás se suman al grupo más
+   * tarde, cada uno en su propio instante):
+   *
+   *   - Si la unidad compuesta todavía es "nueva" (es el primer miembro
+   *     que arriba de todo el grupo), pasa a "listo" igual que una unidad
+   *     simple arribando.
+   *   - Si la unidad compuesta ya venía funcionando pero se había quedado
+   *     sin ningún miembro listo ("esperando-miembros"), este nuevo
+   *     arribo la reactiva.
+   *   - Si la unidad compuesta ya está lista/ejecutando, el nuevo miembro
+   *     simplemente se suma al pool interno: no hay nada más que hacer,
+   *     ya lo va a encontrar elegirSiguienteMiembroListo cuando le toque.
+   *
+   * Resuelve el arribo de UNA unidad compuesta puntual — se llama por cada
+   * unidad, no de una sola vez para toda `estados`, para que quien arma el
+   * paso 1 de cada motor pueda intercalarla con el chequeo de arribo de
+   * las unidades simples EN UN SOLO recorrido de `estados`: así se
+   * preserva el orden real de la lista (que es lo que se usa como
+   * desempate final, `ordenEncolado`, entre quienes arriban en el mismo
+   * instante) — si se hicieran dos recorridos separados (uno para simples,
+   * otro para compuestas), ese orden se mezclaría mal.
+   *
+   * @param {Function} marcarListo - (estado, motivo) => void, del motor que llama.
+   */
+  function resolverArriboDeCompuesta(estadoCompuesto, instante, marcarListo) {
+    let alguienLlego = false;
+    estadoCompuesto.miembros.forEach((m) => {
+      if (m.estado === "no-llegado" && m.arribo === instante) {
+        m.estado = "listo";
+        alguienLlego = true;
+      }
+    });
+    if (!alguienLlego) return;
+
+    if (estadoCompuesto.estado === "listo" || estadoCompuesto.estado === "ejecutando" || estadoCompuesto.estado === "terminado") return;
+
+    const activo = estadoCompuesto.miembros.find((m) => m.id === estadoCompuesto.miembroActivoId);
+    const miembroParaActivar = activo && activo.estado === "listo" ? activo : estadoCompuesto.miembros.find((m) => m.estado === "listo");
+    activarMiembro(estadoCompuesto, miembroParaActivar);
+    marcarListo(estadoCompuesto, "arribo");
+  }
+
+  /**
+   * Análogo, para unidades compuestas (grupos ULT), del paso que hace
+   * volver a "listo" a quien termina su IO en este instante (ver el mismo
+   * paso para unidades simples más abajo en simularPorInstantes) — pero
+   * acá hay que revisar cada MIEMBRO por separado, y solo si la unidad
+   * compuesta se había quedado sin ningún miembro listo (resultado "vacia"
+   * de resolverFinRafagaCompuesta) hace falta reingresarla a la cola de
+   * listos del SO.
+   *
+   * @param {Function} marcarListo - (estado, motivo) => void, del motor que llama.
+   */
+  function resolverRetornosDeIOCompuestos(estados, instante, marcarListo) {
+    estados.forEach((e) => {
+      if (!e.esCompuesta || e.estado === "terminado") return;
+
+      let alguienQuedoListo = false;
+      e.miembros.forEach((m) => {
+        if (m.estado === "io" && m.instanteFinIO === instante) {
+          m.indiceRafaga += 1;
+          if (m.indiceRafaga >= m.rafagas.length) {
+            m.estado = "terminado";
+          } else {
+            m.estado = "listo";
+            alguienQuedoListo = true;
+          }
+        }
+      });
+
+      if (e.estado === "listo" || e.estado === "ejecutando") return;
+
+      if (alguienQuedoListo) {
+        // OJO: hay que llamar a activarMiembro SIEMPRE acá, incluso si el
+        // miembro que quedó listo es el mismo que ya estaba marcado como
+        // activo — es lo que resincroniza `rafagas`/`indiceRafaga` de la
+        // unidad compuesta con el `indiceRafaga` que el miembro acaba de
+        // avanzar (arriba); si se lo saltea en ese caso, `indiceRafaga`
+        // queda apuntando a la ráfaga de CPU ya terminada (no a la
+        // siguiente), y como su `restante` ya está en 0, la unidad nunca
+        // vuelve a detectar "fin de ráfaga" — bucle infinito.
+        const activo = e.miembros.find((m) => m.id === e.miembroActivoId);
+        const miembroParaActivar = activo && activo.estado === "listo" ? activo : e.miembros.find((m) => m.estado === "listo");
+        activarMiembro(e, miembroParaActivar);
+        marcarListo(e, "io");
+      } else if (e.miembros.every((m) => m.estado === "terminado")) {
+        e.estado = "terminado";
+        e.instanteTerminacion = instante;
+      }
+    });
   }
 
   /**
@@ -143,7 +435,12 @@ const SimuladorCore = (function () {
     return bloques;
   }
 
-  /** Calcula espera/retorno/respuesta a partir de los estados finales de la simulación. */
+  /**
+   * Calcula espera/retorno/respuesta a partir de los estados finales de la
+   * simulación — una fila por UNIDAD planificable (ver
+   * construirUnidadesPlanificables): cada hilo KLT independiente y cada
+   * grupo ULT compuesto tienen la suya, ningún hilo tiene trato especial.
+   */
   function calcularMetricas(estados) {
     const metricas = {};
     estados.forEach((e) => {
@@ -220,9 +517,15 @@ const SimuladorCore = (function () {
     };
 
     while (estados.some((e) => e.estado !== "terminado") && instante < limiteSeguridad) {
-      // 1) Arribos nuevos en este instante.
+      // 1) Arribos nuevos en este instante. Las unidades compuestas (grupos
+      //    ULT) no arriban todas de una: sus miembros pueden hacerlo en
+      //    instantes distintos entre sí, así que se resuelven aparte (ver
+      //    resolverArriboDeCompuesta) — pero EN EL MISMO recorrido que las
+      //    simples, no en uno separado, para no alterar el orden real de
+      //    `estados` (el desempate final entre arribos simultáneos).
       estados.forEach((e) => {
-        if (e.estado === "nuevo" && e.arribo === instante) marcarListo(e, "arribo");
+        if (e.esCompuesta) resolverArriboDeCompuesta(e, instante, marcarListo);
+        else if (e.estado === "nuevo" && e.arribo === instante) marcarListo(e, "arribo");
       });
 
       // 2) Selección de quién ejecuta.
@@ -275,7 +578,7 @@ const SimuladorCore = (function () {
         const e = procesoEjecutando;
         const rafagaActual = e.rafagas[e.indiceRafaga];
         rafagaActual.restante -= 1;
-        gantt.push({ proceso: e.id, inicio: instante, fin: instante + 1, tipo: "CPU" });
+        gantt.push({ proceso: idEjecutable(e), inicio: instante, fin: instante + 1, tipo: "CPU" });
         if (quantum !== null) e.quantumRestante -= 1;
 
         // Estado justo después de ejecutar este tick — es lo mismo que se
@@ -283,7 +586,7 @@ const SimuladorCore = (function () {
         // así que tiene sentido mostrárselo al alumno en esta misma celda.
         if (capturarInfoEjecucion) {
           if (!infoEjecucionPorInstante[instante]) infoEjecucionPorInstante[instante] = {};
-          infoEjecucionPorInstante[instante][e.id] = capturarInfoEjecucion(e, instante);
+          infoEjecucionPorInstante[instante][idEjecutable(e)] = capturarInfoEjecucion(e, instante);
         }
 
         const terminoRafaga = rafagaActual.restante === 0;
@@ -309,25 +612,43 @@ const SimuladorCore = (function () {
       // 6) Resolver, ya en el nuevo instante, la transición del proceso que ocupó la CPU.
       if (transicion === "fin-rafaga") {
         const e = procesoEjecutando;
-        if (actualizarEstimacion) e.estimacionRafagaActual = actualizarEstimacion(e, duracionRafagaQueTermino);
-        e.indiceRafaga += 1;
-        if (e.indiceRafaga >= e.rafagas.length) {
-          e.estado = "terminado";
-          e.instanteTerminacion = instante;
+        if (e.esCompuesta) {
+          // Grupo de hilos ULT: si otro hilo del mismo proceso puede seguir
+          // usando la CPU de inmediato, el SO ni se entera del cambio (no
+          // pasa por el planificador ni resetea el quantum) — solo si NO
+          // queda ninguno listo, la unidad compuesta le devuelve la CPU al SO.
+          const resultado = resolverFinRafagaCompuesta(e, dispositivoIO, instante, franjasIO, actualizarEstimacion, duracionRafagaQueTermino);
+          if (resultado !== "sigue") {
+            if (resultado === "terminada") {
+              e.estado = "terminado";
+              e.instanteTerminacion = instante;
+            } else {
+              e.estado = "esperando-miembros";
+            }
+            e.quantumRestante = null;
+            procesoEjecutando = null;
+          }
         } else {
-          const siguiente = e.rafagas[e.indiceRafaga];
-          // Las ráfagas alternan CPU/IO, así que tras una CPU siempre sigue una IO.
-          // El proceso se muestra "en IO" recién desde que el dispositivo
-          // realmente lo atiende (inicio), no desde que lo solicita: si el
-          // dispositivo está ocupado, el tiempo de espera previo no se marca
-          // como nada especial (es análogo a esperar en la cola de listos).
-          const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
-          e.estado = "io";
-          e.instanteFinIO = fin;
-          franjasIO.push({ proceso: e.id, inicio, fin });
+          if (actualizarEstimacion) e.estimacionRafagaActual = actualizarEstimacion(e, duracionRafagaQueTermino);
+          e.indiceRafaga += 1;
+          if (e.indiceRafaga >= e.rafagas.length) {
+            e.estado = "terminado";
+            e.instanteTerminacion = instante;
+          } else {
+            const siguiente = e.rafagas[e.indiceRafaga];
+            // Las ráfagas alternan CPU/IO, así que tras una CPU siempre sigue una IO.
+            // El proceso se muestra "en IO" recién desde que el dispositivo
+            // realmente lo atiende (inicio), no desde que lo solicita: si el
+            // dispositivo está ocupado, el tiempo de espera previo no se marca
+            // como nada especial (es análogo a esperar en la cola de listos).
+            const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
+            e.estado = "io";
+            e.instanteFinIO = fin;
+            franjasIO.push({ proceso: e.id, inicio, fin });
+          }
+          e.quantumRestante = null;
+          procesoEjecutando = null;
         }
-        e.quantumRestante = null;
-        procesoEjecutando = null;
       } else if (transicion === "fin-quantum") {
         marcarListo(procesoEjecutando, "desalojado");
         procesoEjecutando.quantumRestante = null;
@@ -353,6 +674,7 @@ const SimuladorCore = (function () {
           }
         }
       });
+      resolverRetornosDeIOCompuestos(estados, instante, marcarListo);
     }
 
     return {
@@ -388,6 +710,10 @@ const SimuladorCore = (function () {
     ordenarColaListos,
     ColaDispositivoIO,
     crearEstadoInicial,
+    idEjecutable,
+    resolverFinRafagaCompuesta,
+    resolverArriboDeCompuesta,
+    resolverRetornosDeIOCompuestos,
     consolidarGantt,
     calcularMetricas,
     simularPorInstantes,

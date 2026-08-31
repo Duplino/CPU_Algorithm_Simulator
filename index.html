@@ -6,11 +6,27 @@
   <title>Simulador de Planificación de CPU</title>
   <link rel="stylesheet" href="js/vendor/tippy.css" />
   <link rel="stylesheet" href="css/styles.css" />
+  <script>
+    // Aplicar el tema guardado ANTES de pintar la página, para no mostrar
+    // un flash con el tema equivocado (el resto del manejo del botón vive
+    // en main.js).
+    (function () {
+      try {
+        const guardado = localStorage.getItem("tema");
+        if (guardado === "light" || guardado === "dark") {
+          document.documentElement.dataset.theme = guardado;
+        }
+      } catch (error) {
+        // localStorage puede no estar disponible (modo privado, etc.) — no pasa nada, se usa el tema del sistema.
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="encabezado-app">
     <h1>Simulador de Planificación de CPU</h1>
     <div class="acciones-globales">
+      <button type="button" id="boton-tema" title="Cambiar entre modo claro y oscuro"></button>
       <button type="button" id="boton-cargar-ejemplo">Cargar ejemplo</button>
       <button type="button" id="boton-generar-aleatorio">Generar aleatorio</button>
     </div>

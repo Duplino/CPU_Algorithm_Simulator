@@ -1,48 +1,110 @@
 /**
- * editor-procesos.js — Alta/baja/edición de procesos: id, arribo, prioridad
- * y ráfagas (alternadas CPU/IO, una columna de tabla por ráfaga).
+ * editor-procesos.js — Alta/baja/edición de procesos y sus hilos: id,
+ * arribo, ráfagas (alternadas CPU/IO, una columna de tabla por ráfaga).
  *
- * La estimación inicial de ráfaga que usa HRRN NO se edita acá: como es un
- * dato que solo le importa a ese algoritmo, vive en la tarjeta de HRRN
- * dentro de "Ver algoritmos" (ver main.js) — esta tabla de procesos es
- * genérica y no depende de qué algoritmos estén agregados.
+ * La prioridad y la estimación inicial de ráfaga NO se editan acá: son
+ * datos que solo le importan a ciertos algoritmos (Prioridad/Prioridad
+ * expropiativa, y SJF/SRTF/HRRN respectivamente), así que viven en la
+ * tarjeta de ESE algoritmo dentro de "Ver algoritmos" (ver main.js) — esta
+ * tabla de procesos es genérica y no depende de qué algoritmos estén
+ * agregados.
  *
  * Las ráfagas alternan CPU/IO siempre empezando en CPU, así que el tipo de
  * cada COLUMNA se deduce de su posición (índice par = CPU, impar = IO) y es
- * el mismo para todos los procesos — no hace falta que el usuario lo elija.
- * Como distintos procesos pueden tener distinta cantidad de ráfagas, la
- * tabla tiene tantas columnas de ráfaga como el proceso que más tiene; los
- * procesos más cortos solo muestran el botón "+" para extenderse hasta ahí.
+ * el mismo para todos los hilos — no hace falta que el usuario lo elija.
+ * Como distintas filas pueden tener distinta cantidad de ráfagas, la tabla
+ * tiene tantas columnas de ráfaga como la fila que más tiene; las más
+ * cortas solo muestran el botón "+" para extenderse hasta ahí.
  *
- * Por simplicidad, solo se puede quitar la ÚLTIMA ráfaga de cada proceso
- * (como una pila): así la alternancia nunca queda inconsistente sin tener
- * que recalcular tipos de las demás.
+ * Por simplicidad, solo se puede quitar la ÚLTIMA ráfaga de cada fila (como
+ * una pila): así la alternancia nunca queda inconsistente sin tener que
+ * recalcular tipos de las demás.
  *
- * El campo `hilos` queda preparado en el modelo de datos (KLT/ULT) pero sin
- * UI todavía — ver el modelo de datos documentado en el handoff del proyecto.
+ * Columnas: Proceso, Hilo, Arribo, ráfagas (CPU/IO alternadas), Acciones.
+ *
+ * Hilos: un proceso NO tiene ejecución propia — TODA su ejecución vive en
+ * `proceso.hilos[]`, que arranca con un único hilo (nombrado "1") y puede
+ * agrandarse. Ese primer hilo no tiene ningún trato especial: es un hilo
+ * más, con su propio id (editable), tipo (KLT/ULT), arribo y ráfagas,
+ * igual que cualquier otro que se agregue después — por eso todas las
+ * filas de hilos de un proceso comparten el mismo look, y solo la celda de
+ * "Proceso" (rowspan) los agrupa visualmente. La numeración de hilos se
+ * reinicia en cada proceso (el "1" de A.1 no tiene relación con el "1" de
+ * B.1). Si el proceso tiene algún hilo ULT, aparece además una fila propia,
+ * debajo de todas, para elegir el algoritmo de biblioteca que resuelve sus
+ * llamadas bloqueantes (Jacketing o Llamadas no bloqueantes) — es una
+ * propiedad del PROCESO (de su biblioteca ULT), no de cada hilo individual.
  */
 const EditorProcesos = (function () {
   "use strict";
+
+  const OPCIONES_ALGORITMO_BIBLIOTECA = [
+    { valor: "jacketing", etiqueta: "Jacketing" },
+    { valor: "no-bloqueante", etiqueta: "Llamadas no bloqueantes" },
+  ];
 
   function tipoRafagaEnIndice(indice) {
     return indice % 2 === 0 ? "CPU" : "IO";
   }
 
-  function crearProcesoVacio(idSugerido) {
+  /** A, B, ..., Z, AA, AB, ... (como las columnas de una planilla). */
+  function letraDesdeIndice(indice) {
+    let n = indice;
+    let letra = "";
+    do {
+      letra = String.fromCharCode(65 + (n % 26)) + letra;
+      n = Math.floor(n / 26) - 1;
+    } while (n >= 0);
+    return letra;
+  }
+
+  function siguienteIdProceso(procesos) {
+    let indice = procesos.length;
+    let id = letraDesdeIndice(indice);
+    while (procesos.some((p) => p.id === id)) {
+      indice += 1;
+      id = letraDesdeIndice(indice);
+    }
+    return id;
+  }
+
+  /** Un hilo puede arribar (crearse) en un instante distinto al de su proceso — ej. un hilo que se lanza recién cuando el proceso ya lleva un rato corriendo. */
+  function crearHiloVacio(idSugerido, arribo) {
     return {
       id: idSugerido,
-      arribo: 0,
-      prioridad: 1,
+      tipo: "KLT",
+      arribo: arribo || 0,
       rafagas: [{ tipo: "CPU", duracion: 1 }],
-      estimacionInicial: null,
-      hilos: [],
     };
   }
 
-  /** Estimación inicial "efectiva": la que puso el usuario, o por defecto la primera ráfaga de CPU real. */
+  /** Un proceso arranca con un único hilo ("1") — no tiene ejecución propia por fuera de sus hilos. */
+  function crearProcesoVacio(idSugerido) {
+    return {
+      id: idSugerido,
+      prioridad: 1,
+      estimacionInicial: null,
+      algoritmoBiblioteca: null,
+      hilos: [crearHiloVacio("1", 0)],
+    };
+  }
+
+  /** Numeración de hilos, reiniciada por proceso: "1", "2", "3", ... */
+  function siguienteIdHilo(proceso) {
+    let indice = proceso.hilos.length + 1;
+    let id = String(indice);
+    while (proceso.hilos.some((h) => h.id === id)) {
+      indice += 1;
+      id = String(indice);
+    }
+    return id;
+  }
+
+  /** Estimación inicial "efectiva": la que puso el usuario, o por defecto la primera ráfaga de CPU real del primer hilo. */
   function estimacionEfectiva(proceso) {
     if (proceso.estimacionInicial != null) return proceso.estimacionInicial;
-    const primeraCPU = proceso.rafagas.find((r) => r.tipo === "CPU");
+    const primerHilo = proceso.hilos[0];
+    const primeraCPU = primerHilo && primerHilo.rafagas.find((r) => r.tipo === "CPU");
     return primeraCPU ? primeraCPU.duracion : 0;
   }
 
@@ -58,23 +120,29 @@ const EditorProcesos = (function () {
   }
 
   /**
-   * Cantidad de columnas de ráfaga a mostrar: la del proceso más largo, MÁS
-   * UNA. Esa columna extra es la que le da lugar al botón "+" del proceso
-   * más largo — si no se sumara, cuando todos los procesos tuvieran la
-   * misma cantidad de ráfagas ningún de ellos podría agregar una más (la
-   * tabla nunca llegaría a dibujar esa columna).
+   * Cantidad de columnas de ráfaga a mostrar: la del hilo más largo de TODA
+   * la tabla, MÁS UNA. Esa columna extra es la que le da lugar al botón "+"
+   * del hilo más largo — si no se sumara, cuando todos los hilos tuvieran
+   * la misma cantidad de ráfagas ninguno podría agregar una más (la tabla
+   * nunca llegaría a dibujar esa columna).
    */
   function maxCantidadRafagas(procesos) {
-    return Math.max(1, ...procesos.map((p) => p.rafagas.length)) + 1;
+    let maximo = 1;
+    procesos.forEach((proceso) => {
+      proceso.hilos.forEach((hilo) => {
+        maximo = Math.max(maximo, hilo.rafagas.length);
+      });
+    });
+    return maximo + 1;
   }
 
-  /** Celda de la columna de ráfaga `indice` para un proceso dado. */
-  function crearCeldaRafaga(proceso, indice, alCambiar) {
+  /** Celda de la columna de ráfaga `indice` para un hilo. */
+  function crearCeldaRafaga(hilo, indice, alCambiar) {
     const celda = document.createElement("td");
     celda.className = `celda-rafaga celda-${tipoRafagaEnIndice(indice).toLowerCase()}`;
 
-    if (indice < proceso.rafagas.length) {
-      const rafaga = proceso.rafagas[indice];
+    if (indice < hilo.rafagas.length) {
+      const rafaga = hilo.rafagas[indice];
       const input = document.createElement("input");
       input.type = "number";
       input.min = "1";
@@ -86,26 +154,26 @@ const EditorProcesos = (function () {
       });
       celda.appendChild(input);
 
-      const esLaUltima = indice === proceso.rafagas.length - 1;
-      if (esLaUltima && proceso.rafagas.length > 1) {
+      const esLaUltima = indice === hilo.rafagas.length - 1;
+      if (esLaUltima && hilo.rafagas.length > 1) {
         const botonQuitar = document.createElement("button");
         botonQuitar.type = "button";
         botonQuitar.className = "boton-quitar-rafaga";
         botonQuitar.textContent = "×";
         botonQuitar.title = "Quitar esta ráfaga";
         botonQuitar.addEventListener("click", () => {
-          proceso.rafagas.pop();
+          hilo.rafagas.pop();
           alCambiar();
         });
         celda.appendChild(botonQuitar);
       }
-    } else if (indice === proceso.rafagas.length) {
+    } else if (indice === hilo.rafagas.length) {
       const botonAgregar = document.createElement("button");
       botonAgregar.type = "button";
       botonAgregar.className = "boton-agregar-rafaga";
       botonAgregar.textContent = `+ ${tipoRafagaEnIndice(indice)}`;
       botonAgregar.addEventListener("click", () => {
-        proceso.rafagas.push({ tipo: tipoRafagaEnIndice(indice), duracion: 1 });
+        hilo.rafagas.push({ tipo: tipoRafagaEnIndice(indice), duracion: 1 });
         alCambiar();
       });
       celda.appendChild(botonAgregar);
@@ -117,6 +185,27 @@ const EditorProcesos = (function () {
   }
 
   /**
+   * Botón único que alterna KLT ↔ ULT al tocarlo (en vez de dos botones
+   * lado a lado): ahorra espacio, ya que solo hay dos valores posibles.
+   */
+  function crearBotonTipoHilo(obtenerTipo, establecerTipo, alCambiar) {
+    const boton = document.createElement("button");
+    boton.type = "button";
+    boton.title = "Click para alternar entre KLT y ULT";
+    const actualizar = () => {
+      const tipo = obtenerTipo();
+      boton.textContent = tipo;
+      boton.className = `boton-tipo-hilo boton-tipo-hilo-${tipo.toLowerCase()}`;
+    };
+    actualizar();
+    boton.addEventListener("click", () => {
+      establecerTipo(obtenerTipo() === "KLT" ? "ULT" : "KLT");
+      alCambiar();
+    });
+    return boton;
+  }
+
+  /**
    * @param {HTMLElement} contenedor
    * @param {Array} procesos - estado mutable de procesos (se edita in-place)
    * @param {Object} opciones
@@ -125,6 +214,10 @@ const EditorProcesos = (function () {
   function renderizarTablaProcesos(contenedor, procesos, opciones) {
     const { onCambio } = opciones;
     const notificarCambio = () => renderizarTablaProcesos(contenedor, procesos, opciones);
+    const marcarCambio = () => {
+      onCambio(procesos);
+      notificarCambio();
+    };
 
     contenedor.innerHTML = "";
     const tabla = document.createElement("table");
@@ -133,7 +226,7 @@ const EditorProcesos = (function () {
     const cantidadRafagas = maxCantidadRafagas(procesos);
 
     const filaEncabezado = document.createElement("tr");
-    ["Proceso", "Arribo", "Prioridad"].forEach((texto) => {
+    ["Proceso", "Hilo", "Arribo"].forEach((texto) => {
       const th = document.createElement("th");
       th.textContent = texto;
       filaEncabezado.appendChild(th);
@@ -148,63 +241,154 @@ const EditorProcesos = (function () {
     tabla.appendChild(filaEncabezado);
 
     procesos.forEach((proceso) => {
-      const fila = document.createElement("tr");
+      const tieneULT = proceso.hilos.some((h) => h.tipo === "ULT");
+      const cantidadFilas = proceso.hilos.length;
 
-      const tdId = document.createElement("td");
-      const inputId = document.createElement("input");
-      inputId.type = "text";
-      inputId.className = "input-id-proceso";
-      inputId.value = proceso.id;
-      inputId.addEventListener("change", () => {
-        proceso.id = inputId.value.trim() || proceso.id;
-        onCambio(procesos);
-        notificarCambio();
-      });
-      tdId.appendChild(inputId);
-      fila.appendChild(tdId);
+      // --- Una fila por hilo: todas se construyen exactamente igual, no
+      // hay ningún hilo "especial" — solo la celda de Proceso (rowspan) se
+      // agrega una única vez, en la primera fila del grupo.
+      proceso.hilos.forEach((hilo, indiceHilo) => {
+        const fila = document.createElement("tr");
+        fila.className = "fila-hilo";
 
-      const tdArribo = document.createElement("td");
-      tdArribo.appendChild(
-        crearInputNumero(proceso.arribo, (valor) => {
-          proceso.arribo = Math.max(0, valor || 0);
-          onCambio(procesos);
-        })
-      );
-      fila.appendChild(tdArribo);
+        if (indiceHilo === 0) {
+          const tdId = document.createElement("td");
+          tdId.rowSpan = cantidadFilas;
+          const inputId = document.createElement("input");
+          inputId.type = "text";
+          inputId.className = "input-id-proceso";
+          inputId.value = proceso.id;
+          inputId.addEventListener("change", () => {
+            proceso.id = inputId.value.trim() || proceso.id;
+            marcarCambio();
+          });
+          tdId.appendChild(inputId);
+          fila.appendChild(tdId);
+        }
 
-      const tdPrioridad = document.createElement("td");
-      tdPrioridad.appendChild(
-        crearInputNumero(proceso.prioridad, (valor) => {
-          proceso.prioridad = valor || 0;
-          onCambio(procesos);
-        })
-      );
-      fila.appendChild(tdPrioridad);
+        const tdTipo = document.createElement("td");
+        tdTipo.className = "celda-tipo-hilo";
 
-      for (let i = 0; i < cantidadRafagas; i++) {
-        fila.appendChild(
-          crearCeldaRafaga(proceso, i, () => {
+        const inputNombreHilo = document.createElement("input");
+        inputNombreHilo.type = "text";
+        inputNombreHilo.className = "input-id-hilo";
+        inputNombreHilo.value = hilo.id;
+        inputNombreHilo.addEventListener("change", () => {
+          hilo.id = inputNombreHilo.value.trim() || hilo.id;
+          marcarCambio();
+        });
+        tdTipo.appendChild(inputNombreHilo);
+
+        tdTipo.appendChild(
+          crearBotonTipoHilo(
+            () => hilo.tipo,
+            (valor) => {
+              hilo.tipo = valor;
+            },
+            marcarCambio
+          )
+        );
+        fila.appendChild(tdTipo);
+
+        const tdArribo = document.createElement("td");
+        tdArribo.appendChild(
+          crearInputNumero(hilo.arribo || 0, (valor) => {
+            hilo.arribo = Math.max(0, valor || 0);
             onCambio(procesos);
-            notificarCambio();
           })
         );
-      }
+        fila.appendChild(tdArribo);
 
-      const tdAcciones = document.createElement("td");
-      const botonEliminar = document.createElement("button");
-      botonEliminar.type = "button";
-      botonEliminar.className = "boton-eliminar-proceso";
-      botonEliminar.textContent = "Eliminar";
-      botonEliminar.addEventListener("click", () => {
-        const indice = procesos.indexOf(proceso);
-        procesos.splice(indice, 1);
-        onCambio(procesos);
-        notificarCambio();
+        for (let i = 0; i < cantidadRafagas; i++) {
+          fila.appendChild(crearCeldaRafaga(hilo, i, marcarCambio));
+        }
+
+        const tdAcciones = document.createElement("td");
+        tdAcciones.className = "celda-acciones-proceso";
+
+        if (indiceHilo === 0) {
+          const botonAgregarHilo = document.createElement("button");
+          botonAgregarHilo.type = "button";
+          botonAgregarHilo.className = "boton-agregar-hilo";
+          botonAgregarHilo.textContent = "+ Hilo";
+          botonAgregarHilo.title = "Agregar un hilo a este proceso";
+          botonAgregarHilo.addEventListener("click", () => {
+            proceso.hilos.push(crearHiloVacio(siguienteIdHilo(proceso), hilo.arribo));
+            marcarCambio();
+          });
+          tdAcciones.appendChild(botonAgregarHilo);
+
+          const botonEliminarProceso = document.createElement("button");
+          botonEliminarProceso.type = "button";
+          botonEliminarProceso.className = "boton-eliminar-proceso";
+          botonEliminarProceso.textContent = "Eliminar";
+          botonEliminarProceso.addEventListener("click", () => {
+            const indice = procesos.indexOf(proceso);
+            procesos.splice(indice, 1);
+            marcarCambio();
+          });
+          tdAcciones.appendChild(botonEliminarProceso);
+        }
+
+        // Un proceso siempre necesita al menos un hilo — no se puede quitar
+        // el único que le queda.
+        if (proceso.hilos.length > 1) {
+          const botonQuitarHilo = document.createElement("button");
+          botonQuitarHilo.type = "button";
+          botonQuitarHilo.className = "boton-eliminar-hilo";
+          botonQuitarHilo.textContent = "Quitar hilo";
+          botonQuitarHilo.addEventListener("click", () => {
+            proceso.hilos = proceso.hilos.filter((h) => h !== hilo);
+            marcarCambio();
+          });
+          tdAcciones.appendChild(botonQuitarHilo);
+        }
+
+        fila.appendChild(tdAcciones);
+        tabla.appendChild(fila);
       });
-      tdAcciones.appendChild(botonEliminar);
-      fila.appendChild(tdAcciones);
 
-      tabla.appendChild(fila);
+      // --- Fila del algoritmo de biblioteca (solo si hay algún hilo ULT) ---
+      // Va debajo de Proceso, Hilo y Arribo (colspan 3): es una propiedad
+      // del proceso, no de cada hilo, así que ocupa su propia fila en vez
+      // de repetirse en cada una.
+      if (tieneULT) {
+        if (!proceso.algoritmoBiblioteca) proceso.algoritmoBiblioteca = OPCIONES_ALGORITMO_BIBLIOTECA[0].valor;
+
+        const filaBiblioteca = document.createElement("tr");
+        filaBiblioteca.className = "fila-biblioteca-ult";
+
+        const tdBiblioteca = document.createElement("td");
+        tdBiblioteca.colSpan = 3; // debajo de "Proceso", "Hilo" y "Arribo"
+        tdBiblioteca.className = "celda-biblioteca-ult";
+
+        const etiqueta = document.createElement("span");
+        etiqueta.textContent = "Biblioteca ULT:";
+        tdBiblioteca.appendChild(etiqueta);
+
+        const select = document.createElement("select");
+        OPCIONES_ALGORITMO_BIBLIOTECA.forEach((opcion) => {
+          const option = document.createElement("option");
+          option.value = opcion.valor;
+          option.textContent = opcion.etiqueta;
+          if (opcion.valor === proceso.algoritmoBiblioteca) option.selected = true;
+          select.appendChild(option);
+        });
+        select.addEventListener("change", () => {
+          proceso.algoritmoBiblioteca = select.value;
+          onCambio(procesos);
+        });
+        tdBiblioteca.appendChild(select);
+        filaBiblioteca.appendChild(tdBiblioteca);
+
+        // Relleno para el resto de la fila (ráfagas + Acciones), que en
+        // esta fila no muestran nada.
+        const tdRelleno = document.createElement("td");
+        tdRelleno.colSpan = cantidadRafagas;
+        filaBiblioteca.appendChild(tdRelleno);
+        filaBiblioteca.appendChild(document.createElement("td"));
+        tabla.appendChild(filaBiblioteca);
+      }
     });
 
     contenedor.appendChild(tabla);
@@ -214,17 +398,18 @@ const EditorProcesos = (function () {
     botonAgregarProceso.className = "boton-agregar-proceso";
     botonAgregarProceso.textContent = "+ Agregar proceso";
     botonAgregarProceso.addEventListener("click", () => {
-      const siguienteIndice = procesos.length + 1;
-      let idSugerido = `P${siguienteIndice}`;
-      while (procesos.some((p) => p.id === idSugerido)) {
-        idSugerido = `${idSugerido}_`;
-      }
-      procesos.push(crearProcesoVacio(idSugerido));
-      onCambio(procesos);
-      notificarCambio();
+      procesos.push(crearProcesoVacio(siguienteIdProceso(procesos)));
+      marcarCambio();
     });
     contenedor.appendChild(botonAgregarProceso);
   }
 
-  return { crearProcesoVacio, estimacionEfectiva, renderizarTablaProcesos };
+  return {
+    crearProcesoVacio,
+    crearHiloVacio,
+    siguienteIdProceso,
+    letraDesdeIndice,
+    estimacionEfectiva,
+    renderizarTablaProcesos,
+  };
 })();
