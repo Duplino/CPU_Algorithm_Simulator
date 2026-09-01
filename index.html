@@ -27,7 +27,10 @@
     <h1>Simulador de Planificación de CPU</h1>
     <div class="acciones-globales">
       <button type="button" id="boton-tema" title="Cambiar entre modo claro y oscuro"></button>
-      <button type="button" id="boton-cargar-ejemplo">Cargar ejemplo</button>
+      <button type="button" id="boton-importar-archivo" title="Cargar un ejercicio desde un archivo .json">Importar archivo</button>
+      <input type="file" id="input-importar-archivo" accept="application/json,.json" hidden />
+      <button type="button" id="boton-importar-url" title="Cargar un ejercicio desde una URL">Importar desde URL</button>
+      <button type="button" id="boton-exportar" title="Descargar el ejercicio actual como .json">Exportar</button>
       <button type="button" id="boton-generar-aleatorio">Generar aleatorio</button>
     </div>
   </header>

@@ -1,0 +1,34 @@
+{
+  "nombre": "Prioridad vs. Prioridad expropiativa",
+  "descripcion": "Cargá este ejercicio y agregá dos tarjetas: Prioridad y Prioridad expropiativa (recordá la convención de la cátedra: número más bajo = más prioridad). A (prioridad 3) arranca solo con una ráfaga larga; B (prioridad 1, más importante) llega en el instante 2. En la versión no expropiativa, A sigue en CPU hasta terminar su ráfaga antes de que B pueda entrar. En la expropiativa, B desaloja a A apenas llega — A se reanuda después, con lo que le quedaba.",
+  "procesos": [
+    {
+      "id": "A",
+      "prioridad": 3,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 0,
+          "rafagas": [{ "tipo": "CPU", "duracion": 6 }]
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 2,
+          "rafagas": [{ "tipo": "CPU", "duracion": 3 }]
+        }
+      ]
+    }
+  ]
+}

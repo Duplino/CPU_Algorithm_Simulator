@@ -492,7 +492,7 @@
   }
 
   // ----------------------------------------------------------------------
-  // Carga de datos (ejemplo / aleatorio)
+  // Carga de datos (importar / exportar / aleatorio)
   // ----------------------------------------------------------------------
 
   function cargarProcesos(nuevosProcesos) {
@@ -502,48 +502,102 @@
     recalcularTodosLosBloques();
   }
 
-  async function cargarEjemplo() {
+  /**
+   * Normaliza un proceso "crudo" (leído de un .json importado, que puede
+   * venir incompleto o con tipos distintos) al formato interno completo —
+   * para no romper el resto de la app si falta algún campo opcional.
+   */
+  function normalizarProcesoImportado(p, indice) {
+    const id = p && p.id != null ? String(p.id) : EditorProcesos.letraDesdeIndice(indice);
+    const hilosCrudos = p && Array.isArray(p.hilos) && p.hilos.length > 0 ? p.hilos : [{}];
+    const hilos = hilosCrudos.map((h, i) => ({
+      id: h && h.id != null ? String(h.id) : String(i + 1),
+      tipo: h && h.tipo === "ULT" ? "ULT" : "KLT",
+      arribo: h && h.arribo != null ? Math.max(0, Number(h.arribo) || 0) : 0,
+      rafagas:
+        h && Array.isArray(h.rafagas) && h.rafagas.length > 0
+          ? h.rafagas.map((r) => ({ tipo: r && r.tipo === "IO" ? "IO" : "CPU", duracion: Math.max(1, Number(r && r.duracion) || 1) }))
+          : [{ tipo: "CPU", duracion: 1 }],
+    }));
+    return {
+      id,
+      prioridad: p && p.prioridad != null ? Number(p.prioridad) : 1,
+      estimacionInicial: p && p.estimacionInicial != null ? Number(p.estimacionInicial) : null,
+      algoritmoBiblioteca: p && p.algoritmoBiblioteca ? p.algoritmoBiblioteca : null,
+      hilos,
+    };
+  }
+
+  function importarDatos(datos) {
+    if (!datos || !Array.isArray(datos.procesos) || datos.procesos.length === 0) {
+      throw new Error("El archivo no tiene un array de \"procesos\" válido.");
+    }
+    cargarProcesos(datos.procesos.map(normalizarProcesoImportado));
+  }
+
+  function importarDesdeArchivo(archivo) {
+    const lector = new FileReader();
+    lector.onload = () => {
+      try {
+        importarDatos(JSON.parse(lector.result));
+      } catch (error) {
+        alert(`No se pudo importar el archivo: ${error.message}`);
+      }
+    };
+    lector.onerror = () => alert("No se pudo leer el archivo.");
+    lector.readAsText(archivo);
+  }
+
+  async function importarDesdeUrl() {
+    const url = prompt("URL del archivo .json a importar:");
+    if (!url) return;
     try {
-      const respuesta = await fetch("data/ejercicios-ejemplo.json");
-      const datos = await respuesta.json();
-      const ejemplo = datos.ejercicios[0];
-      // Los ejercicios de ejemplo se guardan en el formato "plano" de antes
-      // (arribo/ráfagas propios del proceso): se adaptan acá al formato
-      // actual, donde toda ejecución vive en `hilos[]` — este pasa a ser su
-      // único hilo ("1"), sin trato especial.
-      cargarProcesos(
-        ejemplo.procesos.map((p) => ({
-          id: p.id,
-          prioridad: p.prioridad,
-          estimacionInicial: p.estimacionInicial,
-          algoritmoBiblioteca: null,
-          hilos: [{ id: "1", tipo: "KLT", arribo: p.arribo, rafagas: p.rafagas }],
-        }))
-      );
+      const respuesta = await fetch(url);
+      if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
+      importarDatos(await respuesta.json());
     } catch (error) {
-      alert("No se pudo cargar el ejemplo (¿estás sirviendo el proyecto con un servidor local?).");
+      alert(`No se pudo importar desde esa URL: ${error.message}`);
     }
   }
 
+  /** Descarga el ejercicio actual como .json, en el mismo formato que se puede volver a importar. */
+  function exportar() {
+    if (estado.procesos.length === 0) {
+      alert("No hay procesos para exportar.");
+      return;
+    }
+    const nombre = prompt("Nombre del ejercicio:", "Mi ejercicio") || "ejercicio";
+    const datos = { nombre, procesos: estado.procesos };
+    const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const enlace = document.createElement("a");
+    enlace.href = url;
+    enlace.download = `${nombre.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "ejercicio"}.json`;
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    URL.revokeObjectURL(url);
+  }
+
   function generarAleatorio() {
-    const cantidad = 3 + Math.floor(Math.random() * 3); // entre 3 y 5 procesos
+    const cantidad = 3 + Math.floor(Math.random() * 2); // entre 3 y 4 procesos
+    // La cantidad de pares CPU/IO se sortea UNA vez y se aplica a todos los
+    // procesos por igual (no cada uno la suya), para que sean comparables
+    // entre sí a simple vista.
+    const cantidadPares = 2 + Math.floor(Math.random() * 3); // entre 2 y 4 pares
     const procesos = [];
     for (let i = 0; i < cantidad; i++) {
-      const rafagas = [{ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 6) }];
-      if (Math.random() > 0.4) {
+      const rafagas = [];
+      for (let par = 0; par < cantidadPares; par++) {
+        rafagas.push({ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 6) });
         rafagas.push({ tipo: "IO", duracion: 1 + Math.floor(Math.random() * 4) });
-        rafagas.push({ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 4) });
-      }
-      if (Math.random() > 0.4) {
-        rafagas.push({ tipo: "IO", duracion: 1 + Math.floor(Math.random() * 4) });
-        rafagas.push({ tipo: "CPU", duracion: 1 + Math.floor(Math.random() * 4) });
       }
       procesos.push({
         id: EditorProcesos.letraDesdeIndice(i),
         prioridad: 1 + Math.floor(Math.random() * 5),
         estimacionInicial: null,
         algoritmoBiblioteca: null,
-        hilos: [{ id: "1", tipo: "KLT", arribo: Math.floor(Math.random() * 5), rafagas }],
+        hilos: [{ id: "1", tipo: "KLT", arribo: 1 + Math.floor(Math.random() * 4), rafagas }],
       });
     }
     cargarProcesos(procesos);
@@ -588,7 +642,15 @@
 
   function inicializar() {
     inicializarTema();
-    document.getElementById("boton-cargar-ejemplo").addEventListener("click", cargarEjemplo);
+    const inputImportarArchivo = document.getElementById("input-importar-archivo");
+    document.getElementById("boton-importar-archivo").addEventListener("click", () => inputImportarArchivo.click());
+    inputImportarArchivo.addEventListener("change", (ev) => {
+      const archivo = ev.target.files[0];
+      if (archivo) importarDesdeArchivo(archivo);
+      ev.target.value = ""; // permite volver a importar el mismo archivo después
+    });
+    document.getElementById("boton-importar-url").addEventListener("click", importarDesdeUrl);
+    document.getElementById("boton-exportar").addEventListener("click", exportar);
     document.getElementById("boton-generar-aleatorio").addEventListener("click", generarAleatorio);
     document.getElementById("boton-agregar-bloque").addEventListener("click", agregarBloque);
 

@@ -1,0 +1,40 @@
+{
+  "nombre": "Hilos: KLT independiente vs. grupo ULT bloqueado por el SO",
+  "descripcion": "Cargá este ejercicio y agregá una tarjeta con cualquier algoritmo (por ejemplo FIFO). El proceso A tiene un hilo KLT (A.1) y dos hilos ULT (A.2 y A.3, con biblioteca \"Manejada por el SO\"). Mientras A.2 está en su E/S larga, TODO el grupo ULT queda bloqueado (ni A.2 ni A.3 pueden usar la CPU) — pero A.1, al ser KLT, es una unidad independiente para el SO y sigue avanzando sin que la E/S de sus hermanos lo afecte. Fijate el tramo ocioso: aparece porque A.1 ya terminó su propio trabajo y el grupo ULT sigue bloqueado — con la biblioteca \"Manejada por la biblioteca\" o \"Jacketing\" en vez de \"Manejada por el SO\", ese tramo desaparecería (A.3 podría correr mientras A.2 espera su E/S).",
+  "procesos": [
+    {
+      "id": "A",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": "so",
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 0,
+          "rafagas": [
+            { "tipo": "CPU", "duracion": 3 },
+            { "tipo": "IO", "duracion": 2 },
+            { "tipo": "CPU", "duracion": 2 }
+          ]
+        },
+        {
+          "id": "2",
+          "tipo": "ULT",
+          "arribo": 0,
+          "rafagas": [
+            { "tipo": "CPU", "duracion": 2 },
+            { "tipo": "IO", "duracion": 5 },
+            { "tipo": "CPU", "duracion": 1 }
+          ]
+        },
+        {
+          "id": "3",
+          "tipo": "ULT",
+          "arribo": 0,
+          "rafagas": [{ "tipo": "CPU", "duracion": 2 }]
+        }
+      ]
+    }
+  ]
+}
