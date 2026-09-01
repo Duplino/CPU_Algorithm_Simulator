@@ -205,6 +205,12 @@ const SimuladorCore = (function () {
         primeraEjecucion: null,
         instanteTerminacion: null,
         ticksListo: 0,
+        // Solo lo usa Round Robin Virtual: si al irse a IO justo se le
+        // había agotado el quantum en ese mismo tick, al volver reingresa
+        // por la cola NORMAL en vez de la prioritaria (ver
+        // round-robin-virtual.js) — para el resto de los algoritmos queda
+        // siempre en false, sin efecto.
+        agotoQuantumAlIrseAIO: false,
       };
 
       if (!u.miembros) {
@@ -401,8 +407,17 @@ const SimuladorCore = (function () {
    * listos del SO.
    *
    * @param {Function} marcarListo - (estado, motivo) => void, del motor que llama.
+   * @param {?Function} obtenerMotivo - (estado) => string, motivo a usar al
+   *        reingresar a listos. Por defecto siempre "io" — la usa Round
+   *        Robin Virtual para poder decidir, según `agotoQuantumAlIrseAIO`,
+   *        si el grupo reingresa por la cola prioritaria o por la normal
+   *        (ver el mismo mecanismo para unidades simples en
+   *        round-robin-virtual.js). El motor genérico no la pasa: acá el
+   *        motivo solo afecta el desempate dentro de una única cola, no
+   *        hay dos colas que elegir.
    */
-  function resolverRetornosDeIOCompuestos(estados, instante, marcarListo) {
+  function resolverRetornosDeIOCompuestos(estados, instante, marcarListo, obtenerMotivo) {
+    const motivoDeRetorno = obtenerMotivo || (() => "io");
     estados.forEach((e) => {
       if (!e.esCompuesta || e.estado === "terminado") return;
 
@@ -447,7 +462,7 @@ const SimuladorCore = (function () {
       const activo = e.miembros.find((m) => m.id === e.miembroActivoId);
       const miembroParaActivar = activo && activo.estado === "listo" ? activo : e.miembros.find((m) => m.estado === "listo");
       activarMiembro(e, miembroParaActivar);
-      marcarListo(e, "io");
+      marcarListo(e, motivoDeRetorno(e));
     });
   }
 

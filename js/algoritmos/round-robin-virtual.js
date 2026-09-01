@@ -5,17 +5,24 @@
  * hay dos colas separadas y la de reingreso tiene prioridad ABSOLUTA sobre
  * la normal:
  *
- *   - Cola de reingreso: procesos que vuelven de una ráfaga de IO. Cuando la
- *     CPU queda libre, primero se mira esta cola; si tiene algún proceso, se
- *     atiende antes que cualquiera de la cola normal.
- *   - Cola normal: arribos nuevos y procesos que agotaron su quantum
- *     (desalojados). Solo se atiende si la cola de reingreso está vacía.
+ *   - Cola de reingreso: procesos que vuelven de una ráfaga de IO SIN haber
+ *     agotado el quantum al irse (se fueron "por su cuenta", con turno de
+ *     sobra). Cuando la CPU queda libre, primero se mira esta cola; si
+ *     tiene algún proceso, se atiende antes que cualquiera de la cola
+ *     normal.
+ *   - Cola normal: arribos nuevos, procesos que agotaron su quantum
+ *     (desalojados), y procesos que vuelven de IO habiendo agotado el
+ *     quantum justo en el mismo tick en que terminó su ráfaga de CPU — ya
+ *     usaron su turno completo, así que no tienen motivo para reingresar
+ *     con prioridad; se tratan igual que un desalojo por quantum. Solo se
+ *     atiende si la cola de reingreso está vacía.
  *
- * Además, un proceso que vuelve de IO reingresa con el quantum QUE LE
- * QUEDABA antes de irse a IO (no recupera un quantum completo) — esto es lo
- * que le da el nombre "virtual" a la variante. En cambio, un proceso que
- * vuelve a la cola normal (porque agotó su quantum) sí recibe un quantum
- * nuevo y completo la próxima vez que entra a CPU.
+ * Además, un proceso que vuelve de IO por la cola de reingreso lo hace con
+ * el quantum QUE LE QUEDABA antes de irse (no recupera uno completo) — esto
+ * es lo que le da el nombre "virtual" a la variante. En cambio, un proceso
+ * que vuelve por la cola normal (sea por quantum agotado, o por IO con el
+ * quantum también agotado) sí recibe un quantum nuevo y completo la
+ * próxima vez que entra a CPU.
  *
  * Por esta estructura de dos colas, este algoritmo no reutiliza el motor
  * genérico de simulador-core.js (pensado para una única cola con desempate
@@ -116,6 +123,11 @@ function simularRoundRobinVirtual(procesos, opciones) {
     //    queden fechadas en el instante en que realmente ocurren
     //    (instante+1), no en el instante en que arrancó el tick.
     let transicion = null; // 'fin-rafaga' | 'fin-quantum' | null
+    // Independiente de la transición: ¿se agotó el quantum justo en ESTE
+    // tick? Si la ráfaga también terminó en el mismo tick (se va a IO
+    // habiendo usado el quantum entero), eso determina por qué cola
+    // reingresa al volver de la IO — ver más abajo.
+    let agotoQuantumEsteTick = false;
 
     if (procesoEjecutando) {
       const e = procesoEjecutando;
@@ -123,9 +135,10 @@ function simularRoundRobinVirtual(procesos, opciones) {
       rafagaActual.restante -= 1;
       gantt.push({ proceso: SimuladorCore.idEjecutable(e), inicio: instante, fin: instante + 1, tipo: "CPU" });
       e.quantumRestante -= 1;
+      agotoQuantumEsteTick = e.quantumRestante === 0;
 
       const terminoRafaga = rafagaActual.restante === 0;
-      const agotoQuantum = !terminoRafaga && e.quantumRestante === 0;
+      const agotoQuantum = !terminoRafaga && agotoQuantumEsteTick;
 
       if (terminoRafaga) transicion = "fin-rafaga";
       else if (agotoQuantum) transicion = "fin-quantum";
@@ -155,7 +168,9 @@ function simularRoundRobinVirtual(procesos, opciones) {
         } else if (resultado === "vacia") {
           e.estado = "esperando-miembros";
           // No se resetea quantumRestante: igual que con una IO simple, se
-          // conserva para cuando reingrese por la cola de reingreso.
+          // conserva para cuando reingrese. Pero si justo se agotó ESTE
+          // tick, no corresponde reingreso prioritario (ver más abajo).
+          e.agotoQuantumAlIrseAIO = agotoQuantumEsteTick;
           procesoEjecutando = null;
         }
         // "sigue": no se toca procesoEjecutando ni quantumRestante.
@@ -172,7 +187,12 @@ function simularRoundRobinVirtual(procesos, opciones) {
           e.instanteFinIO = fin;
           franjasIO.push({ proceso: e.id, inicio, fin });
           // No se resetea quantumRestante: es justamente lo que se "descuenta"
-          // y se conserva para cuando reingrese por la cola de reingreso.
+          // y se conserva para cuando reingrese. Pero si el proceso llegó a
+          // agotar el quantum justo en este mismo tick (la ráfaga terminó
+          // exactamente cuando también se acababa el quantum), no reingresa
+          // por la cola prioritaria: usó su turno completo, así que vuelve
+          // por la cola normal, igual que si lo hubieran desalojado.
+          e.agotoQuantumAlIrseAIO = agotoQuantumEsteTick;
         }
         procesoEjecutando = null;
       }
@@ -183,10 +203,11 @@ function simularRoundRobinVirtual(procesos, opciones) {
     }
 
     // 6) Los que terminan su IO en este nuevo instante entran a la cola de
-    //    reingreso. Hay que avanzar el índice de ráfaga acá (ver el mismo
-    //    comentario en simulador-core.js): si no, el proceso queda
-    //    apuntando a la ráfaga de IO que recién terminó en vez de a la
-    //    próxima ráfaga de CPU.
+    //    reingreso — salvo que hayan agotado el quantum justo cuando se
+    //    fueron a esa IO, en cuyo caso van a la cola normal (ver arriba).
+    //    Hay que avanzar el índice de ráfaga acá (ver el mismo comentario
+    //    en simulador-core.js): si no, el proceso queda apuntando a la
+    //    ráfaga de IO que recién terminó en vez de a la próxima de CPU.
     estados.forEach((e) => {
       if (e.estado === "io" && e.instanteFinIO === instante) {
         e.indiceRafaga += 1;
@@ -194,11 +215,11 @@ function simularRoundRobinVirtual(procesos, opciones) {
           e.estado = "terminado";
           e.instanteTerminacion = instante;
         } else {
-          marcarListo(e, "io");
+          marcarListo(e, e.agotoQuantumAlIrseAIO ? "desalojado" : "io");
         }
       }
     });
-    SimuladorCore.resolverRetornosDeIOCompuestos(estados, instante, marcarListo);
+    SimuladorCore.resolverRetornosDeIOCompuestos(estados, instante, marcarListo, (e) => (e.agotoQuantumAlIrseAIO ? "desalojado" : "io"));
   }
 
   return {
