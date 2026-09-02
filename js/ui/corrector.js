@@ -6,8 +6,6 @@
  * (no hay puntaje parcial). Esto NO impide resaltar visualmente qué celdas
  * puntuales están mal — eso es solo una ayuda para que el alumno vea dónde
  * se equivocó, no una nota parcial.
- *
- * Multinivel no usa este módulo: no tiene solución de referencia.
  */
 const Corrector = (function () {
   "use strict";

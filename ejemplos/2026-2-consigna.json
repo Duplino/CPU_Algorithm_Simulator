@@ -1,0 +1,110 @@
+{
+  "nombre": "ejercicio",
+  "procesos": [
+    {
+      "id": "A",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 1,
+          "rafagas": [
+            {
+              "tipo": "CPU",
+              "duracion": 4
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 2
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 0,
+          "rafagas": [
+            {
+              "tipo": "CPU",
+              "duracion": 2
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 4
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 2,
+          "rafagas": [
+            {
+              "tipo": "CPU",
+              "duracion": 3
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 4
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

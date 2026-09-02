@@ -176,11 +176,42 @@ main {
   margin-top: -0.25rem;
 }
 
-.encabezado-seccion-bloques {
+.encabezado-seccion {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+}
+
+.grupo-acciones-seccion {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Botones de ícono (descargar/cargar/importar-por-link, y el link a
+   GitHub del header): mismo tamaño y forma sea <button> o <a>. */
+.boton-icono {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--linea-base);
+  background: var(--superficie);
+  color: var(--tinta-primaria);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.boton-icono:hover {
+  border-color: var(--tinta-secundaria);
+}
+
+.boton-icono svg {
+  display: block;
 }
 
 /* ---------------------------------------------------------------------
@@ -373,10 +404,47 @@ main {
   cursor: pointer;
 }
 
-.boton-eliminar-bloque {
+.acciones-header-bloque {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.boton-info-metricas {
+  border-radius: 999px;
+  padding: 0.3rem 0.55rem;
+  line-height: 1;
+}
+
+.boton-eliminar-bloque {
   color: var(--color-error);
   border-color: var(--color-error);
+}
+
+/* ---------------------------------------------------------------------
+   Modal de métricas (espera/retorno/respuesta) de cada tarjeta de algoritmo
+--------------------------------------------------------------------- */
+.modal-metricas {
+  border: 1px solid var(--linea-sutil);
+  border-radius: 10px;
+  padding: 1.25rem;
+  background: var(--superficie);
+  color: var(--tinta-primaria);
+  max-width: min(90vw, 32rem);
+}
+
+.modal-metricas::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.modal-metricas .area-metricas {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.boton-cerrar-modal {
+  font-size: 0.85rem;
 }
 
 .celda-extra-grilla {
@@ -470,7 +538,8 @@ main {
 
 .celda-proceso {
   position: relative;
-  min-height: 36px;
+  aspect-ratio: 1 / 1;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -615,15 +684,6 @@ main {
   border-top: 2px solid var(--linea-base);
 }
 
-/* ---------------------------------------------------------------------
-   Multinivel
---------------------------------------------------------------------- */
-.aviso-multinivel {
-  color: var(--tinta-secundaria);
-  font-size: 0.85rem;
-  margin-top: 0;
-}
-
 .celda-cola-editable {
   flex-direction: column;
   align-items: stretch;
@@ -664,23 +724,13 @@ main {
   font-weight: 600;
 }
 
-.boton-reordenar-cola, .boton-quitar-cola {
+.boton-quitar-cola {
   border: none;
   background: transparent;
   padding: 0 0.15rem;
   cursor: pointer;
-  font-size: 0.65rem;
-  color: var(--tinta-secundaria);
-}
-
-.boton-reordenar-cola:disabled {
-  opacity: 0.25;
-  cursor: default;
-}
-
-.boton-quitar-cola {
-  color: var(--color-error);
   font-size: 0.8rem;
+  color: var(--color-error);
 }
 
 .select-agregar-cola-instante {
@@ -688,9 +738,36 @@ main {
   padding: 0.15rem;
 }
 
-.boton-agregar-instante {
+.boton-agregar-instante, .boton-agregar-cola-fila {
   margin-top: 0.5rem;
   font-size: 0.8rem;
+}
+
+.boton-agregar-cola-fila {
+  margin-left: 0.5rem;
+}
+
+/* Fila de cola nombrable ("+ Agregar cola"): nombre editable + botón de
+   quitar esa fila entera, en vez de la etiqueta fija "Cola" de antes. */
+.etiqueta-cola-nombrable {
+  gap: 0.3rem;
+}
+
+.input-nombre-cola {
+  width: 100%;
+  min-width: 0;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.3rem;
+}
+
+.boton-quitar-cola-fila {
+  border: none;
+  background: transparent;
+  padding: 0 0.15rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--color-error);
+  flex-shrink: 0;
 }
 
 /* ---------------------------------------------------------------------

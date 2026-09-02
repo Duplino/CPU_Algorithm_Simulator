@@ -1,12 +1,12 @@
 /**
  * main.js — Orquestador de la aplicación y UI genérica.
  *
- * Cada algoritmo (salvo Multinivel) cumple el mismo contrato: recibe
- * (procesos, opciones) y devuelve { gantt, franjasIO, colaListosPorInstante,
- * metricas }. Gracias a eso, este archivo puede tratarlos de forma genérica
- * a través de REGISTRO_ALGORITMOS — no hay switches gigantes por algoritmo
- * acá ni en ningún otro lado de la capa de UI. Agregar un algoritmo nuevo es
- * agregar una entrada a este registro.
+ * Cada algoritmo cumple el mismo contrato: recibe (procesos, opciones) y
+ * devuelve { gantt, franjasIO, colaListosPorInstante, metricas }. Gracias a
+ * eso, este archivo puede tratarlos de forma genérica a través de
+ * REGISTRO_ALGORITMOS — no hay switches gigantes por algoritmo acá ni en
+ * ningún otro lado de la capa de UI. Agregar un algoritmo nuevo es agregar
+ * una entrada a este registro.
  *
  * La UI tiene dos secciones separadas a propósito:
  *   - "Tu Solución": UNA sola grilla interactiva, independiente de cualquier
@@ -73,14 +73,13 @@
    *
    * `modoColaListos` decide qué fila(s) de cola de espera se agregan debajo
    * de la solución de ese algoritmo (ver ui/grilla-gantt.js):
-   *   - "ninguno": no agrega nada (lo usa Multinivel, que no tiene solución).
    *   - "simple": una única fila de cola de listos.
    *   - "rrv": dos filas separadas (reingreso con quantum restante, y normal).
    */
   const REGISTRO_ALGORITMOS = {
     fifo: { etiqueta: "FIFO", simular: simularFIFO, parametros: [], tieneCorreccion: true, modoColaListos: "simple" },
     sjf: {
-      etiqueta: "SJF (no expropiativo)",
+      etiqueta: "SJF (apropiativo)",
       simular: simularSJF,
       parametros: ["estimacion", "alfa"],
       tieneCorreccion: true,
@@ -107,7 +106,7 @@
       formatearTooltipListos: formatearTooltipHRRN,
     },
     prioridad: {
-      etiqueta: "Prioridad (no expropiativa)",
+      etiqueta: "Prioridad (apropiativa)",
       simular: simularPrioridad,
       parametros: [],
       tieneCorreccion: true,
@@ -133,13 +132,6 @@
       parametros: ["quantum"],
       tieneCorreccion: true,
       modoColaListos: "rrv",
-    },
-    multinivel: {
-      etiqueta: "Multinivel (manual)",
-      simular: null,
-      parametros: [],
-      tieneCorreccion: false,
-      modoColaListos: "ninguno",
     },
   };
 
@@ -217,8 +209,9 @@
     return parametros;
   }
 
-  function agregarBloque() {
-    const bloque = crearBloque("fifo");
+  /** @param {string} [algoritmoInicial] - clave de REGISTRO_ALGORITMOS; "fifo" si no se especifica (ej. el botón "+ Agregar algoritmo"). */
+  function agregarBloque(algoritmoInicial) {
+    const bloque = crearBloque(algoritmoInicial || "fifo");
     estado.bloques.push(bloque);
     bloque.elementoDOM = construirElementoBloque(bloque);
     document.getElementById("contenedor-bloques").appendChild(bloque.elementoDOM);
@@ -227,6 +220,7 @@
   function eliminarBloque(bloque) {
     estado.bloques = estado.bloques.filter((b) => b.id !== bloque.id);
     bloque.elementoDOM.remove();
+    limpiarDialogoMetricas(bloque);
   }
 
   /**
@@ -240,7 +234,24 @@
     bloque.elementoDOM = nuevoElemento;
   }
 
+  /**
+   * El modal de métricas de cada tarjeta (ver construirContenidoAlgoritmoSimulado)
+   * se agrega directamente a <body> (no dentro de la tarjeta) para que el
+   * <dialog> se centre en la ventana sin quedar recortado por el overflow de
+   * ningún contenedor — por eso hay que quitarlo a mano tanto al eliminar la
+   * tarjeta como antes de reconstruirla (si no, cada rerenderizarBloque
+   * dejaría un <dialog> viejo huérfano flotando en <body>).
+   */
+  function limpiarDialogoMetricas(bloque) {
+    if (bloque._dialogoMetricas) {
+      bloque._dialogoMetricas.remove();
+      bloque._dialogoMetricas = null;
+    }
+  }
+
   function construirElementoBloque(bloque) {
+    limpiarDialogoMetricas(bloque);
+
     const seccion = document.createElement("section");
     seccion.className = "bloque-algoritmo";
 
@@ -250,11 +261,7 @@
     contenidoBloque.className = "contenido-bloque";
     seccion.appendChild(contenidoBloque);
 
-    if (bloque.algoritmo === "multinivel") {
-      construirContenidoMultinivel(contenidoBloque);
-    } else {
-      construirContenidoAlgoritmoSimulado(contenidoBloque, bloque);
-    }
+    construirContenidoAlgoritmoSimulado(contenidoBloque, bloque);
 
     return seccion;
   }
@@ -292,12 +299,29 @@
     });
     header.appendChild(contenedorParametros);
 
+    // Agrupados en un contenedor propio (en vez de "margin-left: auto" en
+    // cada botón) para que ambos queden pegados entre sí a la derecha del header.
+    const contenedorAcciones = document.createElement("div");
+    contenedorAcciones.className = "acciones-header-bloque";
+
+    const botonInfo = document.createElement("button");
+    botonInfo.type = "button";
+    botonInfo.className = "boton-info-metricas";
+    botonInfo.textContent = "ⓘ";
+    botonInfo.title = "Ver tabla de espera, retorno y respuesta";
+    botonInfo.addEventListener("click", () => {
+      if (bloque._dialogoMetricas) bloque._dialogoMetricas.showModal();
+    });
+    contenedorAcciones.appendChild(botonInfo);
+
     const botonEliminar = document.createElement("button");
     botonEliminar.type = "button";
     botonEliminar.className = "boton-eliminar-bloque";
     botonEliminar.textContent = "Quitar";
     botonEliminar.addEventListener("click", () => eliminarBloque(bloque));
-    header.appendChild(botonEliminar);
+    contenedorAcciones.appendChild(botonEliminar);
+
+    header.appendChild(contenedorAcciones);
 
     return header;
   }
@@ -418,9 +442,25 @@
     areaAcciones.appendChild(mensajeResultado);
     contenedor.appendChild(areaAcciones);
 
+    // La tabla de espera/retorno/respuesta ya no va inline en la tarjeta:
+    // vive en un <dialog> aparte (ver el botón "ⓘ" del header, junto a
+    // "Quitar" — construirHeaderBloque) que se abre a pedido. El <dialog> se
+    // agrega a <body> (no a `contenedor`) para que se centre en la ventana
+    // sin quedar recortado — limpiarDialogoMetricas se ocupa de sacarlo de
+    // ahí cuando la tarjeta se elimina o se reconstruye.
+    const dialogoMetricas = document.createElement("dialog");
+    dialogoMetricas.className = "modal-metricas";
     const areaMetricas = document.createElement("div");
     areaMetricas.className = "area-metricas";
-    contenedor.appendChild(areaMetricas);
+    dialogoMetricas.appendChild(areaMetricas);
+    const botonCerrarModal = document.createElement("button");
+    botonCerrarModal.type = "button";
+    botonCerrarModal.className = "boton-cerrar-modal";
+    botonCerrarModal.textContent = "Cerrar";
+    botonCerrarModal.addEventListener("click", () => dialogoMetricas.close());
+    dialogoMetricas.appendChild(botonCerrarModal);
+    document.body.appendChild(dialogoMetricas);
+    bloque._dialogoMetricas = dialogoMetricas;
 
     botonCorregir.addEventListener("click", () => {
       if (!estado.grillaSolucion || !bloque.resultadoActual) return;
@@ -474,21 +514,7 @@
   }
 
   function recalcularTodosLosBloques() {
-    estado.bloques.forEach((bloque) => {
-      if (bloque.algoritmo !== "multinivel") ejecutarYRenderizarBloque(bloque);
-    });
-  }
-
-  // ----------------------------------------------------------------------
-  // Tarjeta Multinivel (manual, sin corrección ni solución)
-  // ----------------------------------------------------------------------
-
-  function construirContenidoMultinivel(contenedor) {
-    const aviso = document.createElement("p");
-    aviso.className = "aviso-multinivel";
-    aviso.textContent =
-      "Modo manual: no tiene solución de referencia ni corrección automática. Armá las colas y tu grilla en la sección \"Tu Solución\".";
-    contenedor.appendChild(aviso);
+    estado.bloques.forEach((bloque) => ejecutarYRenderizarBloque(bloque));
   }
 
   // ----------------------------------------------------------------------
@@ -535,7 +561,7 @@
     cargarProcesos(datos.procesos.map(normalizarProcesoImportado));
   }
 
-  function importarDesdeArchivo(archivo) {
+  function importarProcesosDesdeArchivo(archivo) {
     const lector = new FileReader();
     lector.onload = () => {
       try {
@@ -548,8 +574,8 @@
     lector.readAsText(archivo);
   }
 
-  async function importarDesdeUrl() {
-    const url = prompt("URL del archivo .json a importar:");
+  async function importarProcesosDesdeUrl() {
+    const url = prompt("URL del archivo .json de consignas a importar:");
     if (!url) return;
     try {
       const respuesta = await fetch(url);
@@ -560,23 +586,89 @@
     }
   }
 
-  /** Descarga el ejercicio actual como .json, en el mismo formato que se puede volver a importar. */
-  function exportar() {
+  /** Arma un blob JSON con `datos` y dispara su descarga como `<nombreSugerido>.json`. */
+  function descargarJSON(datos, nombreSugerido) {
+    const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const enlace = document.createElement("a");
+    enlace.href = url;
+    enlace.download = `${nombreSugerido.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "descarga"}.json`;
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  /** Descarga las consignas (los procesos) actuales como .json, en el mismo formato que se puede volver a importar. */
+  function exportarProcesos() {
     if (estado.procesos.length === 0) {
       alert("No hay procesos para exportar.");
       return;
     }
     const nombre = prompt("Nombre del ejercicio:", "Mi ejercicio") || "ejercicio";
-    const datos = { nombre, procesos: estado.procesos };
-    const blob = new Blob([JSON.stringify(datos, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const enlace = document.createElement("a");
-    enlace.href = url;
-    enlace.download = `${nombre.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "ejercicio"}.json`;
-    document.body.appendChild(enlace);
-    enlace.click();
-    enlace.remove();
-    URL.revokeObjectURL(url);
+    descargarJSON({ nombre, procesos: estado.procesos }, nombre);
+  }
+
+  // ----------------------------------------------------------------------
+  // Importar/exportar SOLUCIÓN (la respuesta armada a mano en "Tu Solución":
+  // las celdas CPU/IO de cada carril + las colas). A diferencia de las
+  // consignas, una solución solo tiene sentido aplicada sobre el ejercicio
+  // que ya está cargado — no trae sus propios procesos, así que IDs de
+  // carril o de proceso que no existen en el ejercicio actual se ignoran en
+  // silencio (ver GrillaGantt.cargarRespuesta/cargarColas).
+  // ----------------------------------------------------------------------
+
+  /** Descarga la solución actual (lo completado en "Tu Solución") como .json. */
+  function exportarSolucion() {
+    if (!estado.grillaSolucion) {
+      alert("Todavía no hay una grilla en \"Tu Solución\" para exportar.");
+      return;
+    }
+    const nombre = prompt("Nombre para este archivo de solución:", "Mi solución") || "solucion";
+    descargarJSON(
+      {
+        nombre,
+        respuesta: estado.grillaSolucion.obtenerRespuesta(),
+        colas: estado.grillaSolucion.obtenerColas(),
+      },
+      nombre
+    );
+  }
+
+  function aplicarDatosSolucion(datos) {
+    if (!estado.grillaSolucion) {
+      throw new Error("Todavía no hay procesos cargados para aplicar una solución.");
+    }
+    if (!datos || (typeof datos !== "object")) {
+      throw new Error("El archivo no tiene datos de solución válidos.");
+    }
+    if (datos.respuesta) estado.grillaSolucion.cargarRespuesta(datos.respuesta);
+    if (datos.colas) estado.grillaSolucion.cargarColas(datos.colas);
+  }
+
+  function importarSolucionDesdeArchivo(archivo) {
+    const lector = new FileReader();
+    lector.onload = () => {
+      try {
+        aplicarDatosSolucion(JSON.parse(lector.result));
+      } catch (error) {
+        alert(`No se pudo importar la solución: ${error.message}`);
+      }
+    };
+    lector.onerror = () => alert("No se pudo leer el archivo.");
+    lector.readAsText(archivo);
+  }
+
+  async function importarSolucionDesdeUrl() {
+    const url = prompt("URL del archivo .json de la solución a importar:");
+    if (!url) return;
+    try {
+      const respuesta = await fetch(url);
+      if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
+      aplicarDatosSolucion(await respuesta.json());
+    } catch (error) {
+      alert(`No se pudo importar la solución desde esa URL: ${error.message}`);
+    }
   }
 
   function generarAleatorio() {
@@ -642,22 +734,95 @@
 
   function inicializar() {
     inicializarTema();
-    const inputImportarArchivo = document.getElementById("input-importar-archivo");
-    document.getElementById("boton-importar-archivo").addEventListener("click", () => inputImportarArchivo.click());
-    inputImportarArchivo.addEventListener("change", (ev) => {
+
+    const inputProcesosArchivo = document.getElementById("input-cargar-procesos-archivo");
+    document.getElementById("boton-cargar-procesos-archivo").addEventListener("click", () => inputProcesosArchivo.click());
+    inputProcesosArchivo.addEventListener("change", (ev) => {
       const archivo = ev.target.files[0];
-      if (archivo) importarDesdeArchivo(archivo);
+      if (archivo) importarProcesosDesdeArchivo(archivo);
       ev.target.value = ""; // permite volver a importar el mismo archivo después
     });
-    document.getElementById("boton-importar-url").addEventListener("click", importarDesdeUrl);
-    document.getElementById("boton-exportar").addEventListener("click", exportar);
+    document.getElementById("boton-cargar-procesos-link").addEventListener("click", importarProcesosDesdeUrl);
+    document.getElementById("boton-descargar-procesos").addEventListener("click", exportarProcesos);
     document.getElementById("boton-generar-aleatorio").addEventListener("click", generarAleatorio);
-    document.getElementById("boton-agregar-bloque").addEventListener("click", agregarBloque);
 
+    const inputSolucionArchivo = document.getElementById("input-cargar-solucion-archivo");
+    document.getElementById("boton-cargar-solucion-archivo").addEventListener("click", () => inputSolucionArchivo.click());
+    inputSolucionArchivo.addEventListener("change", (ev) => {
+      const archivo = ev.target.files[0];
+      if (archivo) importarSolucionDesdeArchivo(archivo);
+      ev.target.value = "";
+    });
+    document.getElementById("boton-cargar-solucion-link").addEventListener("click", importarSolucionDesdeUrl);
+    document.getElementById("boton-descargar-solucion").addEventListener("click", exportarSolucion);
+
+    document.getElementById("boton-agregar-bloque").addEventListener("click", () => agregarBloque());
+
+    inicializarDesdeQuery();
+  }
+
+  /** Carga los dos procesos de ejemplo (A, B) con los que arranca la app cuando no hay "?procesos=" en la URL. */
+  function cargarEjercicioPorDefecto() {
     const b = EditorProcesos.crearProcesoVacio("B");
     b.hilos[0].arribo = 1;
     cargarProcesos([EditorProcesos.crearProcesoVacio("A"), b]);
-    agregarBloque();
+  }
+
+  /**
+   * Estado inicial del ejercicio y de "Ver algoritmos" — por defecto el
+   * ejercicio de ejemplo (A, B) y una única tarjeta FIFO, salvo que la URL
+   * traiga parámetros que los reemplacen (útil para compartir un link que
+   * abra la app ya armada, ej. desde un campus virtual):
+   *
+   *   - "?procesos=<url>": importa las consignas desde ese link al arrancar
+   *     (en vez del ejercicio de ejemplo) — mismo formato que "Descargar" en
+   *     Procesos.
+   *   - "?solucion=<url>": importa además una solución desde ese link,
+   *     aplicada SOBRE las consignas ya cargadas (sean las del ejercicio de
+   *     ejemplo o las de "?procesos=") — mismo formato que "Descargar" en
+   *     Tu Solución. Sin "?procesos=" se aplica sobre el ejercicio de
+   *     ejemplo, así que solo tiene sentido combinado con "?procesos=" de
+   *     ese mismo ejercicio.
+   *   - "?algoritmos=fifo,srtf,...": agrega esas tarjetas en "Ver
+   *     algoritmos" en vez de la única tarjeta FIFO por defecto — claves
+   *     separadas por comas, tal cual las de REGISTRO_ALGORITMOS (las que no
+   *     coinciden con ninguna se ignoran).
+   */
+  async function inicializarDesdeQuery() {
+    const parametros = new URLSearchParams(window.location.search);
+    const procesosUrl = parametros.get("procesos");
+
+    if (procesosUrl) {
+      try {
+        const respuesta = await fetch(procesosUrl);
+        if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
+        importarDatos(await respuesta.json());
+      } catch (error) {
+        alert(`No se pudo cargar el ejercicio desde el link del parámetro "procesos": ${error.message}`);
+        cargarEjercicioPorDefecto();
+      }
+    } else {
+      cargarEjercicioPorDefecto();
+    }
+
+    const solucionUrl = parametros.get("solucion");
+    if (solucionUrl) {
+      try {
+        const respuesta = await fetch(solucionUrl);
+        if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
+        aplicarDatosSolucion(await respuesta.json());
+      } catch (error) {
+        alert(`No se pudo cargar la solución desde el link del parámetro "solucion": ${error.message}`);
+      }
+    }
+
+    const clavesAlgoritmos = (parametros.get("algoritmos") || "")
+      .split(",")
+      .map((clave) => clave.trim())
+      .filter((clave) => REGISTRO_ALGORITMOS[clave]);
+
+    if (clavesAlgoritmos.length > 0) clavesAlgoritmos.forEach((clave) => agregarBloque(clave));
+    else agregarBloque();
   }
 
   document.addEventListener("DOMContentLoaded", inicializar);

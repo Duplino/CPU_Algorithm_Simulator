@@ -20,12 +20,14 @@
  * duración fija) además permite agregar columnas: el ejercicio puede
  * necesitar más instantes de los que el alumno anticipó al empezar.
  *
- * Esa misma grilla del alumno tiene, debajo del eje de instantes, una fila
- * más: la cola de listos armada a mano. Por cada instante el alumno puede
- * agregar procesos y reordenarlos (con flechas ▲▼, o arrastrando un chip a
- * otra posición — incluso a la columna de OTRO instante) — es un espacio de
- * organización libre, análogo a la fila de solo lectura que se ve debajo de
- * las soluciones de los algoritmos, pero editable.
+ * Esa misma grilla del alumno tiene, debajo del eje de instantes, una o más
+ * filas de cola de listos armadas a mano ("+ Agregar cola", cada una con su
+ * propio nombre editable — útil, por ejemplo, para separar colas por nivel
+ * de prioridad). Por cada instante el alumno puede agregar procesos y
+ * reordenarlos arrastrando un chip a otra posición — incluso a la
+ * columna de OTRO instante o a OTRA cola — es un espacio de organización
+ * libre, análogo a la fila de solo lectura que se ve debajo de las
+ * soluciones de los algoritmos, pero editable.
  */
 const GrillaGantt = (function () {
   "use strict";
@@ -38,7 +40,13 @@ const GrillaGantt = (function () {
   const ANCHO_COLUMNA_PROCESO = "64px";
   const ANCHO_COLUMNA_HILO = "52px";
   const ANCHO_COLUMNA_EXTRA = "56px";
-  const ANCHO_MINIMO_COLUMNA = "38px";
+  // Ancho FIJO (no "1fr") de cada columna de instante: así las celdas de
+  // ejecución quedan siempre cuadradas y de tamaño estable, sin importar
+  // cuántos instantes tenga la grilla — antes usaban minmax(., 1fr), que las
+  // hacía más angostas a medida que se agregaban columnas. Ver
+  // `.celda-proceso` en css/styles.css (aspect-ratio: 1) para el otro lado
+  // del cuadrado.
+  const ANCHO_COLUMNA_INSTANTE = "36px";
 
   /** Asigna a cada proceso una clase de color estable, en orden de creación. */
   function asignarColoresProcesos(procesos) {
@@ -314,48 +322,52 @@ const GrillaGantt = (function () {
       }
     });
 
-    // La fila de "cola armada a mano" solo existe en la grilla editable —
-    // es donde vive el editor de colas por instante (ver más abajo).
-    const filaCola = carriles.length + 2;
-    const colaPorInstante = [];
-    const celdasColaPorInstante = [];
+    // Las filas de "cola armada a mano" solo existen en la grilla editable —
+    // es donde vive el editor de colas por instante (ver más abajo). Puede
+    // haber VARIAS colas (ej. una por nivel de prioridad), cada una con
+    // su propio nombre editable — el alumno las agrega y les
+    // pone nombre con `agregarCola`/el botón "+ Agregar cola" más abajo.
+    // `colas[i]` = { nombre }; `datosColas[i][t]` = array de ids de proceso en
+    // esa cola en ese instante; `celdasColas[i][t]` = la celda DOM
+    // correspondiente. Los tres quedan siempre alineados por índice de cola.
+    const colas = [];
+    const datosColas = [];
+    const celdasColas = [];
+    const etiquetasColas = [];
+    let contadorColasCreadas = 0;
 
-    if (editable) {
-      const etiquetaCola = document.createElement("div");
-      etiquetaCola.className = "etiqueta-cola-listos";
-      etiquetaCola.textContent = "Cola";
-      etiquetaCola.style.gridRow = String(filaCola);
-      etiquetaCola.style.gridColumn = "1 / span 2";
-      grilla.appendChild(etiquetaCola);
+    function filaDeCola(indiceCola) {
+      return carriles.length + 2 + indiceCola;
     }
 
     /**
-     * Mueve una entrada de la cola de un instante a otro (o la reordena
-     * dentro del mismo instante), sea por drag&drop o por los botones ▲▼.
-     * Si el proceso ya está en la cola destino, no hace nada (no tiene
-     * sentido que un mismo proceso aparezca dos veces en la misma cola).
+     * Mueve una entrada de la cola de un instante (y una cola) a otro/a — o
+     * la reordena dentro de la misma celda — únicamente por drag&drop (sin
+     * botones de mover: se arrastra el chip directamente). Si el proceso ya
+     * está en la cola destino, no hace nada (no tiene sentido que un mismo
+     * proceso aparezca dos veces en la misma cola/instante).
      */
-    function moverEntradaCola(instanteOrigen, indiceOrigen, instanteDestino, indiceDestinoDeseado) {
-      const colaOrigen = colaPorInstante[instanteOrigen];
-      const colaDestino = colaPorInstante[instanteDestino];
-      const [procesoId] = colaOrigen.splice(indiceOrigen, 1);
+    function moverEntradaCola(colaOrigen, instanteOrigen, indiceOrigen, colaDestino, instanteDestino, indiceDestinoDeseado) {
+      const listaOrigen = datosColas[colaOrigen][instanteOrigen];
+      const listaDestino = datosColas[colaDestino][instanteDestino];
+      const [procesoId] = listaOrigen.splice(indiceOrigen, 1);
 
-      if (colaDestino.includes(procesoId)) {
-        colaOrigen.splice(indiceOrigen, 0, procesoId); // deshacer: ya estaba en destino
+      if (listaDestino.includes(procesoId)) {
+        listaOrigen.splice(indiceOrigen, 0, procesoId); // deshacer: ya estaba en destino
         return;
       }
 
       let destino = indiceDestinoDeseado;
-      if (instanteOrigen === instanteDestino && indiceOrigen < destino) destino -= 1;
-      destino = Math.max(0, Math.min(destino, colaDestino.length));
-      colaDestino.splice(destino, 0, procesoId);
+      if (colaOrigen === colaDestino && instanteOrigen === instanteDestino && indiceOrigen < destino) destino -= 1;
+      destino = Math.max(0, Math.min(destino, listaDestino.length));
+      listaDestino.splice(destino, 0, procesoId);
 
-      renderizarCeldaCola(instanteOrigen);
-      if (instanteDestino !== instanteOrigen) renderizarCeldaCola(instanteDestino);
+      renderizarCeldaCola(colaOrigen, instanteOrigen);
+      if (colaDestino !== colaOrigen || instanteDestino !== instanteOrigen) renderizarCeldaCola(colaDestino, instanteDestino);
     }
 
-    function renderizarCeldaCola(t) {
-      const celda = celdasColaPorInstante[t];
+    function renderizarCeldaCola(colaIndex, t) {
+      const celda = celdasColas[colaIndex][t];
       celda.innerHTML = "";
 
       const lista = document.createElement("div");
@@ -364,10 +376,10 @@ const GrillaGantt = (function () {
       lista.addEventListener("drop", (ev) => {
         ev.preventDefault();
         const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
-        moverEntradaCola(datos.instante, datos.indice, t, colaPorInstante[t].length);
+        moverEntradaCola(datos.cola, datos.instante, datos.indice, colaIndex, t, datosColas[colaIndex][t].length);
       });
 
-      colaPorInstante[t].forEach((procesoId, indice) => {
+      datosColas[colaIndex][t].forEach((procesoId, indice) => {
         const chip = document.createElement("div");
         chip.className = "chip-cola-instante";
         if (coloresProcesos && coloresProcesos[procesoId]) {
@@ -376,7 +388,7 @@ const GrillaGantt = (function () {
         chip.draggable = true;
         chip.addEventListener("dragstart", (ev) => {
           ev.dataTransfer.effectAllowed = "move";
-          ev.dataTransfer.setData("text/plain", JSON.stringify({ instante: t, indice }));
+          ev.dataTransfer.setData("text/plain", JSON.stringify({ cola: colaIndex, instante: t, indice }));
           chip.classList.add("arrastrando");
         });
         chip.addEventListener("dragend", () => chip.classList.remove("arrastrando"));
@@ -390,39 +402,13 @@ const GrillaGantt = (function () {
           ev.preventDefault();
           ev.stopPropagation();
           const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
-          moverEntradaCola(datos.instante, datos.indice, t, indice);
+          moverEntradaCola(datos.cola, datos.instante, datos.indice, colaIndex, t, indice);
         });
-
-        const botonSubir = document.createElement("button");
-        botonSubir.type = "button";
-        botonSubir.className = "boton-reordenar-cola";
-        botonSubir.textContent = "▲";
-        botonSubir.title = "Mover antes en la cola";
-        botonSubir.disabled = indice === 0;
-        botonSubir.addEventListener("click", () => {
-          const cola = colaPorInstante[t];
-          [cola[indice - 1], cola[indice]] = [cola[indice], cola[indice - 1]];
-          renderizarCeldaCola(t);
-        });
-        chip.appendChild(botonSubir);
 
         const etiquetaChip = document.createElement("span");
         etiquetaChip.className = "etiqueta-chip-cola";
         etiquetaChip.textContent = procesoId;
         chip.appendChild(etiquetaChip);
-
-        const botonBajar = document.createElement("button");
-        botonBajar.type = "button";
-        botonBajar.className = "boton-reordenar-cola";
-        botonBajar.textContent = "▼";
-        botonBajar.title = "Mover después en la cola";
-        botonBajar.disabled = indice === colaPorInstante[t].length - 1;
-        botonBajar.addEventListener("click", () => {
-          const cola = colaPorInstante[t];
-          [cola[indice + 1], cola[indice]] = [cola[indice], cola[indice + 1]];
-          renderizarCeldaCola(t);
-        });
-        chip.appendChild(botonBajar);
 
         const botonQuitar = document.createElement("button");
         botonQuitar.type = "button";
@@ -430,8 +416,8 @@ const GrillaGantt = (function () {
         botonQuitar.textContent = "×";
         botonQuitar.title = "Quitar de la cola";
         botonQuitar.addEventListener("click", () => {
-          colaPorInstante[t].splice(indice, 1);
-          renderizarCeldaCola(t);
+          datosColas[colaIndex][t].splice(indice, 1);
+          renderizarCeldaCola(colaIndex, t);
         });
         chip.appendChild(botonQuitar);
 
@@ -439,10 +425,10 @@ const GrillaGantt = (function () {
       });
       celda.appendChild(lista);
 
-      // Un proceso puede aparecer en varios instantes distintos con el
-      // tiempo (vuelve a esperar más de una vez), así que acá solo se
-      // excluye a quien YA está en ESTE instante, no en otros.
-      const disponibles = procesos.map((p) => p.id).filter((id) => !colaPorInstante[t].includes(id));
+      // Un proceso puede aparecer en varios instantes/colas distintos con el
+      // tiempo, así que acá solo se excluye a quien YA está en ESTA cola en
+      // ESTE instante, no en otros.
+      const disponibles = procesos.map((p) => p.id).filter((id) => !datosColas[colaIndex][t].includes(id));
       if (disponibles.length > 0) {
         const select = document.createElement("select");
         select.className = "select-agregar-cola-instante";
@@ -458,12 +444,95 @@ const GrillaGantt = (function () {
         });
         select.addEventListener("change", () => {
           if (select.value) {
-            colaPorInstante[t].push(select.value);
-            renderizarCeldaCola(t);
+            datosColas[colaIndex][t].push(select.value);
+            renderizarCeldaCola(colaIndex, t);
           }
         });
         celda.appendChild(select);
       }
+    }
+
+    /** Etiqueta (nombre editable + botón de quitar) de UNA fila de cola — no depende del instante. */
+    function crearEtiquetaCola(colaIndex) {
+      const contenedor = document.createElement("div");
+      contenedor.className = "etiqueta-cola-listos etiqueta-cola-nombrable";
+      contenedor.style.gridRow = String(filaDeCola(colaIndex));
+      contenedor.style.gridColumn = "1 / span 2";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "input-nombre-cola";
+      input.value = colas[colaIndex].nombre;
+      input.title = "Nombre de esta cola";
+      input.addEventListener("change", () => {
+        colas[colaIndex].nombre = input.value.trim() || "Cola";
+      });
+      contenedor.appendChild(input);
+
+      const botonQuitarCola = document.createElement("button");
+      botonQuitarCola.type = "button";
+      botonQuitarCola.className = "boton-quitar-cola-fila";
+      botonQuitarCola.title = "Quitar esta cola";
+      botonQuitarCola.textContent = "×";
+      botonQuitarCola.addEventListener("click", () => eliminarCola(colaIndex));
+      contenedor.appendChild(botonQuitarCola);
+
+      grilla.appendChild(contenedor);
+      etiquetasColas[colaIndex] = contenedor;
+    }
+
+    /**
+     * Reconstruye TODAS las filas de cola (etiquetas + celdas de cada
+     * instante) desde `colas`/`datosColas`. Se llama entera cada vez que la
+     * cantidad de colas cambia (agregar/quitar una) — es más simple que
+     * reindexar en el lugar las filas que quedan debajo de la que se quitó,
+     * y acá el volumen de DOM es chico.
+     */
+    function reconstruirFilasColas() {
+      etiquetasColas.forEach((el) => el && el.remove());
+      etiquetasColas.length = 0;
+      celdasColas.forEach((fila) => fila.forEach((c) => c && c.remove()));
+      celdasColas.length = 0;
+
+      colas.forEach((_cola, colaIndex) => {
+        crearEtiquetaCola(colaIndex);
+        celdasColas[colaIndex] = [];
+        for (let t = 0; t < duracionActual; t++) {
+          const celda = document.createElement("div");
+          celda.className = "celda-cola-listos celda-cola-editable";
+          celda.style.gridRow = String(filaDeCola(colaIndex));
+          celda.style.gridColumn = String(columnaInicioInstantes + t);
+          // El drop se acepta en TODA la celda (no solo en la listita interna
+          // de chips): si el instante está vacío, la lista mide casi nada y
+          // la mayor parte del área visible es el <select> de abajo — sin
+          // esto, soltar ahí no movería nada.
+          celda.addEventListener("dragover", (ev) => ev.preventDefault());
+          celda.addEventListener("drop", (ev) => {
+            ev.preventDefault();
+            const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
+            moverEntradaCola(datos.cola, datos.instante, datos.indice, colaIndex, t, datosColas[colaIndex][t].length);
+          });
+          grilla.appendChild(celda);
+          celdasColas[colaIndex].push(celda);
+          renderizarCeldaCola(colaIndex, t);
+        }
+      });
+    }
+
+    /** Agrega una cola nueva (fila propia, nombrable) al final. */
+    function agregarCola(nombreInicial) {
+      contadorColasCreadas += 1;
+      datosColas.push(
+        new Array(duracionActual).fill(null).map(() => [])
+      );
+      colas.push({ nombre: nombreInicial || (contadorColasCreadas === 1 ? "Cola" : `Cola ${contadorColasCreadas}`) });
+      reconstruirFilasColas();
+    }
+
+    function eliminarCola(colaIndex) {
+      colas.splice(colaIndex, 1);
+      datosColas.splice(colaIndex, 1);
+      reconstruirFilasColas();
     }
 
     let eje = null;
@@ -472,7 +541,7 @@ const GrillaGantt = (function () {
     function actualizarPlantillaColumnas() {
       const columnasEtiqueta = `${ANCHO_COLUMNA_PROCESO} ${ANCHO_COLUMNA_HILO}`;
       const columnaEtiqueta = columnaExtra ? `${columnasEtiqueta} ${ANCHO_COLUMNA_EXTRA}` : columnasEtiqueta;
-      grilla.style.gridTemplateColumns = `${columnaEtiqueta} repeat(${duracionActual}, minmax(${ANCHO_MINIMO_COLUMNA}, 1fr))`;
+      grilla.style.gridTemplateColumns = `${columnaEtiqueta} repeat(${duracionActual}, ${ANCHO_COLUMNA_INSTANTE})`;
     }
 
     function reconstruirEje() {
@@ -547,28 +616,17 @@ const GrillaGantt = (function () {
       });
 
       if (editable) {
-        colaPorInstante.push([]);
-        const celdaCola = document.createElement("div");
-        celdaCola.className = "celda-cola-listos celda-cola-editable";
-        celdaCola.style.gridRow = String(filaCola);
-        celdaCola.style.gridColumn = String(columnaInicioInstantes + t);
-        // El drop se acepta en TODA la celda (no solo en la listita interna
-        // de chips): si el instante está vacío, la lista mide casi nada y
-        // la mayor parte del área visible es el <select> de abajo — sin
-        // esto, soltar ahí no movería nada.
-        celdaCola.addEventListener("dragover", (ev) => ev.preventDefault());
-        celdaCola.addEventListener("drop", (ev) => {
-          ev.preventDefault();
-          const datos = JSON.parse(ev.dataTransfer.getData("text/plain"));
-          moverEntradaCola(datos.instante, datos.indice, t, colaPorInstante[t].length);
-        });
-        grilla.appendChild(celdaCola);
-        celdasColaPorInstante.push(celdaCola);
-        renderizarCeldaCola(t);
+        // Cada cola existente suma una columna nueva (vacía) en este
+        // instante — reconstruirFilasColas se encarga de crear la celda
+        // correspondiente para todas ellas de una vez.
+        datosColas.forEach((porInstante) => porInstante.push([]));
+        reconstruirFilasColas();
       }
 
       reconstruirEje();
     }
+
+    if (editable) agregarCola(); // arranca con una única cola "Cola", como antes
 
     for (let t = 0; t < duracionInicial; t++) agregarColumna();
 
@@ -581,6 +639,14 @@ const GrillaGantt = (function () {
       botonAgregarInstante.textContent = "+ Agregar instante";
       botonAgregarInstante.addEventListener("click", agregarColumna);
       contenedor.appendChild(botonAgregarInstante);
+
+      const botonAgregarCola = document.createElement("button");
+      botonAgregarCola.type = "button";
+      botonAgregarCola.className = "boton-agregar-cola-fila";
+      botonAgregarCola.textContent = "+ Agregar cola";
+      botonAgregarCola.title = "Agregar otra fila de cola, con su propio nombre";
+      botonAgregarCola.addEventListener("click", () => agregarCola());
+      contenedor.appendChild(botonAgregarCola);
     }
 
     return {
@@ -613,6 +679,57 @@ const GrillaGantt = (function () {
        */
       asegurarDuracionMinima: (minimo) => {
         while (duracionActual < minimo) agregarColumna();
+      },
+      /**
+       * Vuelca `respuesta` (misma forma que devuelve `obtenerRespuesta`,
+       * `{ [carrilId]: Array<'CPU'|'IO'|null> }`) sobre la grilla — la usa
+       * "Importar solución" (ver main.js). Agranda la grilla si la
+       * respuesta trae más instantes de los que hay hoy; los carriles que
+       * no aparecen en `respuesta` quedan sin tocar.
+       */
+      cargarRespuesta: (respuesta) => {
+        if (!respuesta) return;
+        let maximaDuracion = 0;
+        Object.values(respuesta).forEach((valores) => {
+          if (Array.isArray(valores)) maximaDuracion = Math.max(maximaDuracion, valores.length);
+        });
+        while (duracionActual < maximaDuracion) agregarColumna();
+
+        carriles.forEach((carril) => {
+          const valores = respuesta[carril.id];
+          if (!valores) return;
+          celdasPorProceso[carril.id].forEach((celda, t) => {
+            aplicarEstadoCelda(celda, valores[t] || "", coloresProcesos);
+          });
+        });
+      },
+      /** Snapshot de las colas armadas a mano — { nombre, porInstante: [[id,...], ...] } por cola. */
+      obtenerColas: () =>
+        colas.map((cola, indiceCola) => ({
+          nombre: cola.nombre,
+          porInstante: datosColas[indiceCola].map((lista) => lista.slice()),
+        })),
+      /**
+       * Reemplaza TODAS las colas actuales por `colasGuardadas` (misma forma
+       * que devuelve `obtenerColas`) — la usa "Importar solución". IDs de
+       * proceso que ya no existen en el ejercicio actual se descartan en
+       * silencio, para no romper la carga si la solución es de otro
+       * ejercicio con procesos distintos.
+       */
+      cargarColas: (colasGuardadas) => {
+        colas.length = 0;
+        datosColas.length = 0;
+        const idsValidos = new Set(procesos.map((p) => p.id));
+        (colasGuardadas || []).forEach((colaGuardada) => {
+          colas.push({ nombre: (colaGuardada && colaGuardada.nombre) || "Cola" });
+          const porInstante = new Array(duracionActual).fill(null).map(() => []);
+          ((colaGuardada && colaGuardada.porInstante) || []).forEach((lista, t) => {
+            if (t < duracionActual) porInstante[t] = (lista || []).filter((id) => idsValidos.has(id));
+          });
+          datosColas.push(porInstante);
+        });
+        if (colas.length === 0) agregarCola();
+        else reconstruirFilasColas();
       },
       /** Cantidad de filas (carriles) que tiene la grilla — la usa `renderizarGrillaSolucion`
        * para saber en qué fila arrancar las filas extra de cola de listos. */
@@ -696,11 +813,10 @@ const GrillaGantt = (function () {
    * Grilla de solo lectura con la solución de un algoritmo.
    *
    * @param {Object} [opciones]
-   * @param {"ninguno"|"simple"|"rrv"} [opciones.modo] - controla si (y cómo)
-   *        se agrega, debajo del eje de instantes, la fila con quién espera
+   * @param {"simple"|"rrv"} [opciones.modo] - controla si (y cómo) se
+   *        agrega, debajo del eje de instantes, la fila con quién espera
    *        en la cola de listos en cada instante (el que ejecuta o está en
-   *        IO nunca aparece ahí). "ninguno" no agrega nada (lo usa
-   *        Multinivel, que no tiene solución de referencia); "simple"
+   *        IO nunca aparece ahí). "simple"
    *        agrega una única fila desde `resultado.colaListosPorInstante`;
    *        "rrv" agrega dos filas (cola de reingreso con el quantum
    *        restante entre paréntesis, y cola normal) desde

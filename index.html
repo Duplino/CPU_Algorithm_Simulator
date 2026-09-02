@@ -27,32 +27,92 @@
     <h1>Simulador de Planificación de CPU</h1>
     <div class="acciones-globales">
       <button type="button" id="boton-tema" title="Cambiar entre modo claro y oscuro"></button>
-      <button type="button" id="boton-importar-archivo" title="Cargar un ejercicio desde un archivo .json">Importar archivo</button>
-      <input type="file" id="input-importar-archivo" accept="application/json,.json" hidden />
-      <button type="button" id="boton-importar-url" title="Cargar un ejercicio desde una URL">Importar desde URL</button>
-      <button type="button" id="boton-exportar" title="Descargar el ejercicio actual como .json">Exportar</button>
-      <button type="button" id="boton-generar-aleatorio">Generar aleatorio</button>
+      <a
+        class="boton-icono"
+        href="https://github.com/Duplino/CPU_Algorithm_Simulator"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Ver repositorio en GitHub"
+      >
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8"/>
+        </svg>
+      </a>
     </div>
   </header>
 
   <main>
     <section class="seccion-procesos">
-      <h2>Procesos</h2>
+      <div class="encabezado-seccion">
+        <h2>Procesos</h2>
+        <div class="grupo-acciones-seccion">
+          <button type="button" class="boton-icono" id="boton-descargar-procesos" title="Descargar las consignas (procesos) como .json">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/>
+              <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/>
+            </svg>
+          </button>
+          <button type="button" class="boton-icono" id="boton-cargar-procesos-archivo" title="Cargar consignas desde un archivo .json">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/>
+              <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708z"/>
+            </svg>
+          </button>
+          <input type="file" id="input-cargar-procesos-archivo" accept="application/json,.json" hidden />
+          <button type="button" class="boton-icono" id="boton-cargar-procesos-link" title="Cargar consignas desde una URL">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1 1 0 0 0-.154.199 2 2 0 0 1 .861 3.337L6.88 11.45a2 2 0 1 1-2.83-2.83l.793-.792a4 4 0 0 1-.128-1.287z"/>
+              <path d="M6.586 4.672A3 3 0 0 0 7.414 9.5l.775-.776a2 2 0 0 1-.896-3.346L9.12 3.55a2 2 0 1 1 2.83 2.83l-.793.792c.112.42.155.855.128 1.287l1.372-1.372a3 3 0 1 0-4.243-4.243z"/>
+            </svg>
+          </button>
+          <button type="button" class="boton-icono" id="boton-generar-aleatorio" title="Generar un ejercicio aleatorio nuevo">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9"/>
+              <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
       <div id="contenedor-procesos"></div>
     </section>
 
     <section class="seccion-tu-solucion">
-      <h2>Tu Solución</h2>
+      <div class="encabezado-seccion">
+        <h2>Tu Solución</h2>
+        <div class="grupo-acciones-seccion">
+          <button type="button" class="boton-icono" id="boton-descargar-solucion" title="Descargar tu solución como .json">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/>
+              <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/>
+            </svg>
+          </button>
+          <button type="button" class="boton-icono" id="boton-cargar-solucion-archivo" title="Cargar una solución desde un archivo .json">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/>
+              <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708z"/>
+            </svg>
+          </button>
+          <input type="file" id="input-cargar-solucion-archivo" accept="application/json,.json" hidden />
+          <button type="button" class="boton-icono" id="boton-cargar-solucion-link" title="Cargar una solución desde una URL">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1 1 0 0 0-.154.199 2 2 0 0 1 .861 3.337L6.88 11.45a2 2 0 1 1-2.83-2.83l.793-.792a4 4 0 0 1-.128-1.287z"/>
+              <path d="M6.586 4.672A3 3 0 0 0 7.414 9.5l.775-.776a2 2 0 0 1-.896-3.346L9.12 3.55a2 2 0 1 1 2.83 2.83l-.793.792c.112.42.155.855.128 1.287l1.372-1.372a3 3 0 1 0-4.243-4.243z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
       <p class="explicacion-seccion">
         Completá acá tu respuesta a mano, sin importar qué algoritmo estés practicando. Un click alterna
-        CPU → IO → nada; "+ Agregar instante" suma columnas si te quedás corto. La fila "Cola" de abajo es
-        para armar a mano la cola de listos de cada instante — se puede arrastrar para reordenar.
+        CPU → IO → nada; "+ Agregar instante" suma columnas si te quedás corto. Las filas de cola de abajo
+        son para armar a mano la cola de listos de cada instante — "+ Agregar cola" suma una fila más (con
+        su propio nombre editable, útil por ejemplo para separar colas por prioridad) y los procesos se
+        arrastran para reordenarlos o moverlos entre instantes y colas.
       </p>
       <div id="contenedor-grilla-solucion"></div>
     </section>
 
     <section class="seccion-algoritmos">
-      <div class="encabezado-seccion-bloques">
+      <div class="encabezado-seccion">
         <h2>Ver algoritmos</h2>
         <button type="button" id="boton-agregar-bloque">+ Agregar algoritmo</button>
       </div>
@@ -75,7 +135,6 @@
   <script src="js/algoritmos/prioridad-expropiativa.js"></script>
   <script src="js/algoritmos/round-robin.js"></script>
   <script src="js/algoritmos/round-robin-virtual.js"></script>
-  <script src="js/algoritmos/multinivel.js"></script>
   <script src="js/ui/grilla-gantt.js"></script>
   <script src="js/ui/corrector.js"></script>
   <script src="js/ui/metricas.js"></script>

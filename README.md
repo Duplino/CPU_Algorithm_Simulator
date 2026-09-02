@@ -13,13 +13,12 @@ Herramienta web hecha para la materia **Sistemas Operativos** de la **UTN FRBA**
 ### Algoritmos soportados
 
 - FIFO
-- SJF (no expropiativo)
+- SJF (apropiativo)
 - SRTF (SJF expropiativo)
 - HRRN
-- Prioridad (no expropiativa y expropiativa)
+- Prioridad (apropiativa y expropiativa)
 - Round Robin
 - Round Robin Virtual (con cola de reingreso)
-- Multinivel (100% manual, sin solución de referencia ni corrección automática)
 
 SJF, SRTF y HRRN soportan además un toggle de "estimaciones" (con reestimación por suavizado exponencial) en vez de conocer la ráfaga real de antemano.
 
@@ -32,14 +31,22 @@ Cada proceso tiene uno o más hilos (nombrados "1", "2", ... dentro de cada proc
   - **Manejada por el SO**: sin manejo especial — la E/S de cualquier hilo ULT bloquea a TODO el grupo hasta que esa E/S puntual termina.
   - **Manejada por la biblioteca** o **Jacketing**: un hilo en E/S no bloquea a sus hermanos (mismo resultado simulado, mecanismos distintos).
 
-### Importar / exportar ejercicios
+### Importar / exportar
 
-Un ejercicio (los procesos y sus hilos) se puede:
+Los botones con íconos junto a cada título hacen lo mismo en las dos secciones: descargar como `.json`, cargar desde un archivo `.json` local, o importar desde una URL.
 
-- **Importar** desde un archivo `.json` local, o desde una URL.
-- **Exportar** a un archivo `.json`, para compartirlo o guardarlo.
+- Junto a **"Procesos"**: las **consignas** (los procesos y sus hilos). Formato `{ "nombre": "...", "procesos": [...] }`, con los procesos en el mismo formato interno de la app (ver los archivos de `ejemplos/` como referencia). Importar consignas reemplaza el ejercicio actual.
+- Junto a **"Tu Solución"**: la **solución** que armó el alumno a mano (las celdas CPU/IO de cada carril, más las colas de listos armadas). Formato `{ "nombre": "...", "respuesta": {...}, "colas": [...] }`. Se aplica sobre el ejercicio ya cargado — no trae sus propios procesos, así que solo tiene sentido importarla después de tener las consignas correspondientes cargadas.
 
-El formato es `{ "nombre": "...", "procesos": [...] }`, con los procesos en el mismo formato interno de la app (ver los archivos de `ejemplos/` como referencia).
+### Parámetros de URL
+
+Para compartir un link que abra la app ya armada (ej. desde un campus virtual), se puede pisar el estado inicial con parámetros de query:
+
+- `?procesos=<url>` — importa las consignas desde esa URL al arrancar, en vez del ejercicio de ejemplo.
+- `?solucion=<url>` — importa además una solución desde esa URL, aplicada sobre las consignas ya cargadas (las de `?procesos=`, o si no está, las del ejercicio de ejemplo).
+- `?algoritmos=fifo,srtf,...` — agrega esas tarjetas en "Ver algoritmos" en vez de la única tarjeta FIFO por defecto (claves separadas por comas: `fifo`, `sjf`, `srtf`, `hrrn`, `prioridad`, `prioridad-expropiativa`, `round-robin`, `round-robin-virtual`).
+
+Ejemplo: `?procesos=https://ejemplo.com/mi-ejercicio.json&solucion=https://ejemplo.com/mi-solucion.json&algoritmos=fifo,srtf`.
 
 ### Ejemplos
 

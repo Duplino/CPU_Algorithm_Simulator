@@ -6,6 +6,23 @@
 const Metricas = (function () {
   "use strict";
 
+  /** Qué significa cada métrica — se muestra con Tippy.js al pasar el mouse por su encabezado. */
+  const EXPLICACION_METRICA = {
+    Espera: "Tiempo total que el proceso pasó en la cola de listos, esperando la CPU (sin ejecutar ni hacer E/S).",
+    Retorno: "Tiempo total desde que el proceso arriba hasta que termina: instante de terminación − arribo.",
+    Respuesta: "Tiempo desde que el proceso arriba hasta la primera vez que entra a ejecutar: primera ejecución − arribo.",
+  };
+
+  /** Mismo mecanismo que GrillaGantt.aplicarTooltip: Tippy.js si está disponible, si no cae al `title` nativo. */
+  function aplicarTooltipEncabezado(th, texto) {
+    th.classList.add("item-con-tooltip");
+    if (typeof tippy === "function") {
+      tippy(th, { content: texto, theme: "simulador", placement: "top" });
+    } else {
+      th.title = texto;
+    }
+  }
+
   function renderizarMetricas(contenedor, metricas) {
     contenedor.innerHTML = "";
     const ids = Object.keys(metricas);
@@ -18,6 +35,7 @@ const Metricas = (function () {
     ["Proceso", "Espera", "Retorno", "Respuesta"].forEach((texto) => {
       const th = document.createElement("th");
       th.textContent = texto;
+      if (EXPLICACION_METRICA[texto]) aplicarTooltipEncabezado(th, EXPLICACION_METRICA[texto]);
       filaHeader.appendChild(th);
     });
     tabla.appendChild(filaHeader);
