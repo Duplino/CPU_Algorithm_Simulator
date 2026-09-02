@@ -11,9 +11,14 @@ const Corrector = (function () {
   "use strict";
 
   /**
-   * @param {Object} respuestaAlumno - { [carrilId]: Array<'CPU'|'IO'|null> },
+   * @param {Object} respuestaAlumno - { [carrilId]: Array<'CPU'|string|null> },
    *        tal como devuelve GrillaGantt.crearGrillaInteractiva().obtenerRespuesta()
-   *        (una entrada por CARRIL: el proceso y cada uno de sus hilos, si tiene)
+   *        (una entrada por CARRIL: el proceso y cada uno de sus hilos, si tiene).
+   *        Los valores de E/S son el nombre exacto del dispositivo ("IO",
+   *        "IO1", "IO2"...) — la comparación es estricta, así que si el
+   *        ejercicio tiene más de un dispositivo (ver
+   *        EditorProcesos.renderizarDispositivosIO), hay que acertar CUÁL
+   *        usó cada ráfaga, no solo que "estaba en algún IO".
    * @param {Array} procesos - procesos del ejercicio
    * @param {Object} resultado - resultado del algoritmo (con `gantt` y `franjasIO`)
    * @returns {{correcto: boolean, celdasIncorrectas: Array<{procesoId: string, instante: number}>}}

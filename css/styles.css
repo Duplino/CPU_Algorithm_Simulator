@@ -276,6 +276,31 @@ main {
   padding: 0.2rem 0.35rem;
 }
 
+/* "Input group": el dropdown de dispositivo pegado a la izquierda del
+   número de duración, como un único campo compuesto — solo aparece en
+   ráfagas de E/S cuando el ejercicio tiene 2+ dispositivos configurados
+   (ver EditorProcesos.crearSelectorDispositivoRafaga). */
+.grupo-rafaga-io {
+  display: inline-flex;
+}
+
+.selector-dispositivo-rafaga {
+  width: 3.4rem;
+  padding: 0.2rem 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+  border-right: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.input-duracion-rafaga-agrupada {
+  width: 3rem;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .boton-quitar-rafaga {
   border: none;
   background: transparent;
@@ -292,6 +317,61 @@ main {
 .boton-eliminar-proceso {
   color: var(--color-error);
   border-color: var(--color-error);
+}
+
+/* ---------------------------------------------------------------------
+   Dispositivos de E/S (debajo de la tabla de procesos)
+--------------------------------------------------------------------- */
+.fila-dispositivos-io {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.etiqueta-dispositivos-io {
+  font-size: 0.8rem;
+  color: var(--tinta-secundaria);
+}
+
+.contenedor-dispositivos-io {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.chip-dispositivo-io {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: var(--superficie);
+  border: 1px solid var(--linea-base);
+  border-radius: 999px;
+  padding: 0.15rem 0.3rem;
+}
+
+.input-nombre-dispositivo-io {
+  width: 3rem;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.2rem;
+}
+
+.boton-quitar-dispositivo-io {
+  border: none;
+  background: transparent;
+  color: var(--color-error);
+  cursor: pointer;
+  padding: 0 0.1rem;
+  font-size: 0.8rem;
+}
+
+.boton-agregar-dispositivo-io {
+  font-size: 0.8rem;
 }
 
 /* ---------------------------------------------------------------------
@@ -347,16 +427,34 @@ main {
   background: var(--proceso-color-7);
 }
 
-.fila-biblioteca-ult {
-  background: color-mix(in srgb, var(--proceso-color-1) 6%, transparent);
+/* La celda del ID de proceso pasa a ser flex-column para poder apilar
+   debajo el selector de biblioteca ULT (ver crearSelectorBibliotecaUlt) sin
+   agregar una fila nueva a la tabla. */
+.celda-id-proceso {
+  vertical-align: top;
 }
 
-.celda-biblioteca-ult {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--tinta-secundaria);
+.celda-id-proceso > * {
+  display: block;
+}
+
+.selector-biblioteca-ult {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--linea-sutil);
+}
+
+.etiqueta-biblioteca-ult {
+  display: block;
+  font-size: 0.65rem;
+  color: var(--tinta-muted);
+  margin-bottom: 0.15rem;
+}
+
+.selector-biblioteca-ult select {
+  width: 100%;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.3rem;
 }
 
 /* ---------------------------------------------------------------------
@@ -574,6 +672,16 @@ main {
 
 .celda-proceso.celda-incorrecta {
   outline: 2px solid var(--color-error);
+  outline-offset: -2px;
+}
+
+/* Dos procesos marcados con el mismo estado (CPU, o el mismo dispositivo de
+   E/S) en el mismo instante — ver GrillaGantt.revisarConflictosColumna. A
+   propósito NO se borra ninguna de las dos celdas: se resaltan ambas para
+   que el alumno decida cuál corregir, sin perder datos sin querer mientras
+   recorre el ciclo de estados con clicks. */
+.celda-proceso.celda-conflicto-mutex {
+  outline: 2px dashed var(--color-error);
   outline-offset: -2px;
 }
 

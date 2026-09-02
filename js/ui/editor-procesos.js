@@ -1,6 +1,9 @@
 /**
  * editor-procesos.js — Alta/baja/edición de procesos y sus hilos: id,
  * arribo, ráfagas (alternadas CPU/IO, una columna de tabla por ráfaga).
+ * También expone `renderizarDispositivosIO`, el editor (aparte, del
+ * ejercicio entero — no por proceso) de los dispositivos de E/S que se
+ * pueden marcar celda por celda en "Tu Solución" (ver ui/grilla-gantt.js).
  *
  * La prioridad y la estimación inicial de ráfaga NO se editan acá: son
  * datos que solo le importan a ciertos algoritmos (Prioridad/Prioridad
@@ -30,9 +33,11 @@
  * filas de hilos de un proceso comparten el mismo look, y solo la celda de
  * "Proceso" (rowspan) los agrupa visualmente. La numeración de hilos se
  * reinicia en cada proceso (el "1" de A.1 no tiene relación con el "1" de
- * B.1). Si el proceso tiene algún hilo ULT, aparece además una fila propia,
- * debajo de todas, para elegir cómo se manejan sus llamadas bloqueantes de
- * E/S (manejada por el SO, por la biblioteca, o con Jacketing) — es una
+ * B.1). Si el proceso tiene algún hilo ULT, debajo del ID del proceso (en la
+ * MISMA celda, no en una fila nueva — así agregar/sacar hilos ULT no hace
+ * crecer la tabla y correr de lugar a los demás procesos) aparece un
+ * selector para elegir cómo se manejan sus llamadas bloqueantes de E/S
+ * (manejada por el SO, por la biblioteca, o con Jacketing) — es una
  * propiedad del PROCESO (de su biblioteca ULT), no de cada hilo individual.
  */
 const EditorProcesos = (function () {
@@ -147,13 +152,51 @@ const EditorProcesos = (function () {
     return maximo + 1;
   }
 
-  /** Celda de la columna de ráfaga `indice` para un hilo. */
-  function crearCeldaRafaga(hilo, indice, alCambiar) {
+  /**
+   * Dropdown de "con qué dispositivo de E/S se hace esta ráfaga" — solo se
+   * muestra (ver `crearCeldaRafaga`) cuando el ejercicio tiene 2 o más
+   * dispositivos configurados; con uno solo no hay nada que elegir, la
+   * ráfaga usa ESE por default (ver SimuladorCore.nombreDispositivoDe).
+   * Autocorrige la ráfaga si su dispositivo ya no existe (fue renombrado o
+   * eliminado desde que se guardó) reasignándola al primero disponible, en
+   * vez de dejarla apuntando a un nombre fantasma.
+   */
+  function crearSelectorDispositivoRafaga(rafaga, dispositivosIO, alCambiar) {
+    if (!dispositivosIO.some((d) => d.nombre === rafaga.dispositivoIO)) {
+      rafaga.dispositivoIO = dispositivosIO[0].nombre;
+    }
+
+    const select = document.createElement("select");
+    select.className = "selector-dispositivo-rafaga";
+    select.title = "Dispositivo de E/S que usa esta ráfaga";
+    dispositivosIO.forEach((dispositivo) => {
+      const option = document.createElement("option");
+      option.value = dispositivo.nombre;
+      option.textContent = dispositivo.nombre;
+      if (dispositivo.nombre === rafaga.dispositivoIO) option.selected = true;
+      select.appendChild(option);
+    });
+    select.addEventListener("change", () => {
+      rafaga.dispositivoIO = select.value;
+      alCambiar();
+    });
+    return select;
+  }
+
+  /**
+   * Celda de la columna de ráfaga `indice` para un hilo.
+   * @param {Array} dispositivosIO - dispositivos de E/S del ejercicio (ver
+   *        EditorProcesos.renderizarDispositivosIO) — con 2 o más, las
+   *        ráfagas de E/S muestran además el dropdown de a cuál pertenecen.
+   */
+  function crearCeldaRafaga(hilo, indice, alCambiar, dispositivosIO) {
     const celda = document.createElement("td");
     celda.className = `celda-rafaga celda-${tipoRafagaEnIndice(indice).toLowerCase()}`;
 
     if (indice < hilo.rafagas.length) {
       const rafaga = hilo.rafagas[indice];
+      const mostrarSelectorDispositivo = tipoRafagaEnIndice(indice) === "IO" && dispositivosIO.length > 1;
+
       const input = document.createElement("input");
       input.type = "number";
       input.min = "1";
@@ -163,7 +206,19 @@ const EditorProcesos = (function () {
         rafaga.duracion = Math.max(1, Number(input.value) || 1);
         alCambiar();
       });
-      celda.appendChild(input);
+
+      if (mostrarSelectorDispositivo) {
+        // "Input group": el dropdown de dispositivo pegado a la izquierda
+        // del número de duración, como un único campo compuesto.
+        const grupo = document.createElement("div");
+        grupo.className = "grupo-rafaga-io";
+        grupo.appendChild(crearSelectorDispositivoRafaga(rafaga, dispositivosIO, alCambiar));
+        input.classList.add("input-duracion-rafaga-agrupada");
+        grupo.appendChild(input);
+        celda.appendChild(grupo);
+      } else {
+        celda.appendChild(input);
+      }
 
       const esLaUltima = indice === hilo.rafagas.length - 1;
       if (esLaUltima && hilo.rafagas.length > 1) {
@@ -184,7 +239,9 @@ const EditorProcesos = (function () {
       botonAgregar.className = "boton-agregar-rafaga";
       botonAgregar.textContent = `+ ${tipoRafagaEnIndice(indice)}`;
       botonAgregar.addEventListener("click", () => {
-        hilo.rafagas.push({ tipo: tipoRafagaEnIndice(indice), duracion: 1 });
+        const nuevaRafaga = { tipo: tipoRafagaEnIndice(indice), duracion: 1 };
+        if (nuevaRafaga.tipo === "IO") nuevaRafaga.dispositivoIO = dispositivosIO[0].nombre;
+        hilo.rafagas.push(nuevaRafaga);
         alCambiar();
       });
       celda.appendChild(botonAgregar);
@@ -217,13 +274,52 @@ const EditorProcesos = (function () {
   }
 
   /**
+   * Selector de "Biblioteca ULT" (cómo se manejan las E/S bloqueantes de los
+   * hilos ULT del proceso) — vive DENTRO de la celda del ID del proceso, no
+   * en una fila propia: es compacto a propósito para no ensanchar de más esa
+   * columna, ya que aparece/desaparece al alternar el tipo de un hilo entre
+   * KLT y ULT (ver crearBotonTipoHilo) y no debería notarse como un cambio
+   * brusco de layout.
+   */
+  function crearSelectorBibliotecaUlt(proceso, alCambiar) {
+    const contenedor = document.createElement("div");
+    contenedor.className = "selector-biblioteca-ult";
+
+    const etiqueta = document.createElement("span");
+    etiqueta.className = "etiqueta-biblioteca-ult";
+    etiqueta.textContent = "Biblioteca ULT";
+    contenedor.appendChild(etiqueta);
+
+    const select = document.createElement("select");
+    select.title = "Cómo se manejan las E/S bloqueantes de los hilos ULT de este proceso";
+    OPCIONES_ALGORITMO_BIBLIOTECA.forEach((opcion) => {
+      const option = document.createElement("option");
+      option.value = opcion.valor;
+      option.textContent = opcion.etiqueta;
+      if (opcion.valor === proceso.algoritmoBiblioteca) option.selected = true;
+      select.appendChild(option);
+    });
+    select.addEventListener("change", () => {
+      proceso.algoritmoBiblioteca = select.value;
+      alCambiar();
+    });
+    contenedor.appendChild(select);
+
+    return contenedor;
+  }
+
+  /**
    * @param {HTMLElement} contenedor
    * @param {Array} procesos - estado mutable de procesos (se edita in-place)
    * @param {Object} opciones
    * @param {Function} opciones.onCambio - se llama con `procesos` cada vez que algo cambia
+   * @param {Array} [opciones.dispositivosIO] - dispositivos de E/S del
+   *        ejercicio (ver `renderizarDispositivosIO`); con 2 o más, las
+   *        ráfagas de E/S muestran el dropdown de a cuál pertenecen.
    */
   function renderizarTablaProcesos(contenedor, procesos, opciones) {
     const { onCambio } = opciones;
+    const dispositivosIO = opciones.dispositivosIO && opciones.dispositivosIO.length > 0 ? opciones.dispositivosIO : [{ nombre: "IO" }];
     const notificarCambio = () => renderizarTablaProcesos(contenedor, procesos, opciones);
     const marcarCambio = () => {
       onCambio(procesos);
@@ -253,6 +349,7 @@ const EditorProcesos = (function () {
 
     procesos.forEach((proceso) => {
       const tieneULT = proceso.hilos.some((h) => h.tipo === "ULT");
+      if (tieneULT && !proceso.algoritmoBiblioteca) proceso.algoritmoBiblioteca = OPCIONES_ALGORITMO_BIBLIOTECA[0].valor;
       const cantidadFilas = proceso.hilos.length;
 
       // --- Una fila por hilo: todas se construyen exactamente igual, no
@@ -265,6 +362,8 @@ const EditorProcesos = (function () {
         if (indiceHilo === 0) {
           const tdId = document.createElement("td");
           tdId.rowSpan = cantidadFilas;
+          tdId.className = "celda-id-proceso";
+
           const inputId = document.createElement("input");
           inputId.type = "text";
           inputId.className = "input-id-proceso";
@@ -274,6 +373,15 @@ const EditorProcesos = (function () {
             marcarCambio();
           });
           tdId.appendChild(inputId);
+
+          // Debajo del ID, EN LA MISMA celda (no una fila nueva): así
+          // aparecer/desaparecer al alternar un hilo entre KLT y ULT no
+          // hace crecer la tabla entera ni corre de lugar a los procesos
+          // de abajo — ver crearSelectorBibliotecaUlt.
+          if (tieneULT) {
+            tdId.appendChild(crearSelectorBibliotecaUlt(proceso, () => onCambio(procesos)));
+          }
+
           fila.appendChild(tdId);
         }
 
@@ -311,7 +419,7 @@ const EditorProcesos = (function () {
         fila.appendChild(tdArribo);
 
         for (let i = 0; i < cantidadRafagas; i++) {
-          fila.appendChild(crearCeldaRafaga(hilo, i, marcarCambio));
+          fila.appendChild(crearCeldaRafaga(hilo, i, marcarCambio, dispositivosIO));
         }
 
         const tdAcciones = document.createElement("td");
@@ -358,48 +466,6 @@ const EditorProcesos = (function () {
         fila.appendChild(tdAcciones);
         tabla.appendChild(fila);
       });
-
-      // --- Fila del algoritmo de biblioteca (solo si hay algún hilo ULT) ---
-      // Va debajo de Proceso, Hilo y Arribo (colspan 3): es una propiedad
-      // del proceso, no de cada hilo, así que ocupa su propia fila en vez
-      // de repetirse en cada una.
-      if (tieneULT) {
-        if (!proceso.algoritmoBiblioteca) proceso.algoritmoBiblioteca = OPCIONES_ALGORITMO_BIBLIOTECA[0].valor;
-
-        const filaBiblioteca = document.createElement("tr");
-        filaBiblioteca.className = "fila-biblioteca-ult";
-
-        const tdBiblioteca = document.createElement("td");
-        tdBiblioteca.colSpan = 3; // debajo de "Proceso", "Hilo" y "Arribo"
-        tdBiblioteca.className = "celda-biblioteca-ult";
-
-        const etiqueta = document.createElement("span");
-        etiqueta.textContent = "Biblioteca ULT:";
-        tdBiblioteca.appendChild(etiqueta);
-
-        const select = document.createElement("select");
-        OPCIONES_ALGORITMO_BIBLIOTECA.forEach((opcion) => {
-          const option = document.createElement("option");
-          option.value = opcion.valor;
-          option.textContent = opcion.etiqueta;
-          if (opcion.valor === proceso.algoritmoBiblioteca) option.selected = true;
-          select.appendChild(option);
-        });
-        select.addEventListener("change", () => {
-          proceso.algoritmoBiblioteca = select.value;
-          onCambio(procesos);
-        });
-        tdBiblioteca.appendChild(select);
-        filaBiblioteca.appendChild(tdBiblioteca);
-
-        // Relleno para el resto de la fila (ráfagas + Acciones), que en
-        // esta fila no muestran nada.
-        const tdRelleno = document.createElement("td");
-        tdRelleno.colSpan = cantidadRafagas;
-        filaBiblioteca.appendChild(tdRelleno);
-        filaBiblioteca.appendChild(document.createElement("td"));
-        tabla.appendChild(filaBiblioteca);
-      }
     });
 
     contenedor.appendChild(tabla);
@@ -415,6 +481,87 @@ const EditorProcesos = (function () {
     contenedor.appendChild(botonAgregarProceso);
   }
 
+  const CANTIDAD_MAXIMA_DISPOSITIVOS_IO = 4;
+
+  /**
+   * Editor de los dispositivos de E/S del ejercicio — a diferencia de los
+   * hilos, NO son por proceso: los comparten todos los procesos por igual
+   * (los usa la fila de la grilla en "Tu Solución" — ver
+   * ui/grilla-gantt.js). Por defecto hay uno solo, sin nombre editable (se
+   * etiqueta simplemente "IO", como toda la vida); recién al agregar un
+   * segundo aparecen los nombres editables (de hasta 3 letras, ej. "IO1",
+   * "DSK") para poder distinguirlos: en "Tu Solución", un click en una
+   * celda alterna entre CPU, cada dispositivo (por su nombre) y vacío.
+   *
+   * @param {HTMLElement} contenedor
+   * @param {Array} dispositivosIO - estado mutable [{ nombre }], se edita in-place
+   * @param {Object} opciones
+   * @param {Function} opciones.onCambio - se llama con `dispositivosIO` cada vez que algo cambia
+   */
+  function renderizarDispositivosIO(contenedor, dispositivosIO, opciones) {
+    const { onCambio } = opciones;
+    const notificarCambio = () => renderizarDispositivosIO(contenedor, dispositivosIO, opciones);
+    const marcarCambio = () => {
+      onCambio(dispositivosIO);
+      notificarCambio();
+    };
+
+    contenedor.innerHTML = "";
+
+    // Con un único dispositivo no hace falta nombrarlo (es el "IO" genérico
+    // de siempre) — el editor de nombres solo aparece a partir del segundo,
+    // que es cuando realmente hace falta distinguirlos.
+    if (dispositivosIO.length > 1) {
+      dispositivosIO.forEach((dispositivo, indice) => {
+        const chip = document.createElement("div");
+        chip.className = "chip-dispositivo-io";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "input-nombre-dispositivo-io";
+        input.maxLength = 3;
+        input.value = dispositivo.nombre;
+        input.title = "Nombre de este dispositivo de E/S (hasta 3 letras)";
+        input.addEventListener("change", () => {
+          dispositivo.nombre = input.value.trim().toUpperCase().slice(0, 3) || `IO${indice + 1}`;
+          marcarCambio();
+        });
+        chip.appendChild(input);
+
+        const botonQuitar = document.createElement("button");
+        botonQuitar.type = "button";
+        botonQuitar.className = "boton-quitar-dispositivo-io";
+        botonQuitar.textContent = "×";
+        botonQuitar.title = "Quitar este dispositivo de E/S";
+        botonQuitar.addEventListener("click", () => {
+          dispositivosIO.splice(indice, 1);
+          // Si vuelve a quedar uno solo, recupera el nombre genérico — ya
+          // no hay nada que distinguir, y el editor de nombres desaparece.
+          if (dispositivosIO.length === 1) dispositivosIO[0].nombre = "IO";
+          marcarCambio();
+        });
+        chip.appendChild(botonQuitar);
+
+        contenedor.appendChild(chip);
+      });
+    }
+
+    if (dispositivosIO.length < CANTIDAD_MAXIMA_DISPOSITIVOS_IO) {
+      const botonAgregar = document.createElement("button");
+      botonAgregar.type = "button";
+      botonAgregar.className = "boton-agregar-dispositivo-io";
+      botonAgregar.textContent = "+ Agregar dispositivo de E/S";
+      botonAgregar.addEventListener("click", () => {
+        // Al pasar de 1 a 2, el primero deja de ser el "IO" genérico y pasa
+        // a llamarse "IO1" — recién ahí sus nombres importan.
+        if (dispositivosIO.length === 1) dispositivosIO[0].nombre = "IO1";
+        dispositivosIO.push({ nombre: `IO${dispositivosIO.length + 1}` });
+        marcarCambio();
+      });
+      contenedor.appendChild(botonAgregar);
+    }
+  }
+
   return {
     crearProcesoVacio,
     crearHiloVacio,
@@ -422,5 +569,6 @@ const EditorProcesos = (function () {
     letraDesdeIndice,
     estimacionEfectiva,
     renderizarTablaProcesos,
+    renderizarDispositivosIO,
   };
 })();

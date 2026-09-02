@@ -26,14 +26,14 @@
  *
  * Por esta estructura de dos colas, este algoritmo no reutiliza el motor
  * genérico de simulador-core.js (pensado para una única cola con desempate
- * uniforme); sí reutiliza de ahí el dispositivo de IO y los helpers de
+ * uniforme); sí reutiliza de ahí los dispositivos de E/S y los helpers de
  * consolidación de gantt / cálculo de métricas.
  */
 function simularRoundRobinVirtual(procesos, opciones) {
   const quantum = opciones && opciones.quantum != null ? opciones.quantum : 1;
 
   const estados = SimuladorCore.crearEstadoInicial(procesos);
-  const dispositivoIO = new SimuladorCore.ColaDispositivoIO();
+  const dispositivoIO = new SimuladorCore.ColaDispositivosIO();
   const gantt = [];
   const franjasIO = [];
   const colaListosPorInstante = {};
@@ -182,10 +182,11 @@ function simularRoundRobinVirtual(procesos, opciones) {
           e.quantumRestante = null;
         } else {
           const siguiente = e.rafagas[e.indiceRafaga];
-          const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
+          const nombreDispositivo = SimuladorCore.nombreDispositivoDe(siguiente);
+          const { inicio, fin } = dispositivoIO.solicitar(nombreDispositivo, siguiente.duracion, instante);
           e.estado = "io";
           e.instanteFinIO = fin;
-          franjasIO.push({ proceso: e.id, inicio, fin });
+          franjasIO.push({ proceso: e.id, inicio, fin, dispositivo: nombreDispositivo });
           // No se resetea quantumRestante: es justamente lo que se "descuenta"
           // y se conserva para cuando reingrese. Pero si el proceso llegó a
           // agotar el quantum justo en este mismo tick (la ráfaga terminó

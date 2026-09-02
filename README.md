@@ -7,7 +7,8 @@ Herramienta web hecha para la materia **Sistemas Operativos** de la **UTN FRBA**
 ## Qué hace
 
 - Permite cargar procesos (y sus hilos, KLT o ULT) con ráfagas de CPU/IO alternadas.
-- En **"Tu Solución"** el alumno arma a mano, celda por celda, el diagrama de Gantt y la cola de listos de cada instante.
+- Debajo de "Procesos" se pueden agregar hasta 4 dispositivos de E/S (por defecto hay uno solo, llamado "IO"; a partir del segundo se les puede poner nombre, de hasta 3 letras). Con 2 o más, cada ráfaga de E/S elige con cuál se hace — el motor de simulación arma una cola FIFO independiente por dispositivo, así que dos ráfagas en dispositivos distintos se atienden en paralelo de verdad.
+- En **"Tu Solución"** el alumno arma a mano, celda por celda, el diagrama de Gantt (un click alterna CPU → cada dispositivo de E/S → nada; dos celdas marcadas con el mismo estado en el mismo instante se resaltan en rojo, sin borrarse solas) y la cola de listos de cada instante.
 - En **"Ver algoritmos"** se puede agregar una o más tarjetas, cada una con la solución de referencia de un algoritmo de planificación, y corregir la respuesta propia contra esa solución.
 
 ### Algoritmos soportados
@@ -35,7 +36,7 @@ Cada proceso tiene uno o más hilos (nombrados "1", "2", ... dentro de cada proc
 
 Los botones con íconos junto a cada título hacen lo mismo en las dos secciones: descargar como `.json`, cargar desde un archivo `.json` local, o importar desde una URL.
 
-- Junto a **"Procesos"**: las **consignas** (los procesos y sus hilos). Formato `{ "nombre": "...", "procesos": [...] }`, con los procesos en el mismo formato interno de la app (ver los archivos de `ejemplos/` como referencia). Importar consignas reemplaza el ejercicio actual.
+- Junto a **"Procesos"**: las **consignas** (los procesos, sus hilos, y los dispositivos de E/S). Formato `{ "nombre": "...", "procesos": [...], "dispositivosIO": [...] }`, con los procesos en el mismo formato interno de la app (ver los archivos de `ejemplos/` como referencia). Importar consignas reemplaza el ejercicio actual.
 - Junto a **"Tu Solución"**: la **solución** que armó el alumno a mano (las celdas CPU/IO de cada carril, más las colas de listos armadas). Formato `{ "nombre": "...", "respuesta": {...}, "colas": [...] }`. Se aplica sobre el ejercicio ya cargado — no trae sus propios procesos, así que solo tiene sentido importarla después de tener las consignas correspondientes cargadas.
 
 ### Parámetros de URL

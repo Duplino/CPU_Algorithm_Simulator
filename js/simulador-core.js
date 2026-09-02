@@ -3,13 +3,14 @@
  *
  * Lógica común a todos los algoritmos de planificación:
  *   - la regla de desempate de la cola de listos (ordenarColaListos),
- *   - el modelado del dispositivo de IO (único, con cola FIFO),
+ *   - el modelado de los dispositivos de E/S (uno o varios, cada uno con su
+ *     propia cola FIFO — ver ColaDispositivosIO),
  *   - el motor genérico de simulación instante a instante (simularPorInstantes),
  *     que usan FIFO, SJF, SRTF, Prioridad, Prioridad expropiativa, HRRN y Round Robin.
  *
  * Round Robin Virtual NO usa este motor genérico: tiene una estructura de dos
  * colas (normal + reingreso) que se implementa aparte en round-robin-virtual.js,
- * pero sí reutiliza ColaDispositivoIO y los helpers de consolidación/métricas
+ * pero sí reutiliza ColaDispositivosIO y los helpers de consolidación/métricas
  * de este archivo.
  *
  * Todo se expone en el objeto global `SimuladorCore` para poder usarse con
@@ -73,25 +74,35 @@ const SimuladorCore = (function () {
   }
 
   /**
-   * Modela un único dispositivo de IO compartido por todos los procesos.
-   * Si dos procesos piden IO al mismo tiempo, el segundo espera en una cola
-   * FIFO hasta que el dispositivo se libera (no hay IO en paralelo).
+   * Modela el conjunto de dispositivos de E/S del ejercicio (por defecto uno
+   * solo, "IO"; puede haber hasta 4 — ver EditorProcesos.renderizarDispositivosIO
+   * y la columna de E/S en la tabla de "Procesos", que ahora deja elegir CON
+   * QUÉ dispositivo se hace cada ráfaga). Cada dispositivo tiene su PROPIA
+   * cola FIFO independiente: dos ráfagas en el MISMO dispositivo se turnan
+   * (la segunda espera a que la primera termine), pero dos ráfagas en
+   * dispositivos DISTINTOS se atienden en paralelo, sin bloquearse entre sí.
+   * Las colas se crean solas, la primera vez que se pide cada nombre — no
+   * hace falta declarar de antemano cuáles existen.
    */
-  class ColaDispositivoIO {
+  class ColaDispositivosIO {
     constructor() {
-      this.ocupadoHasta = 0;
+      this.ocupadoHastaPorDispositivo = {};
     }
 
     /**
-     * Solicita el dispositivo para una ráfaga de IO.
+     * Solicita EL dispositivo `nombreDispositivo` para una ráfaga de IO.
+     * @param {string} nombreDispositivo - viene de `rafaga.dispositivoIO`;
+     *        si una ráfaga vieja no lo trae (ejercicios de antes de que
+     *        existiera esta opción), el llamador pasa "IO" por default.
      * @param {number} duracion - duración nominal de la ráfaga de IO
      * @param {number} instanteSolicitud - instante en que el proceso queda libre de CPU y pide IO
      * @returns {{inicio: number, fin: number}} intervalo real en que se usa el dispositivo
      */
-    solicitar(duracion, instanteSolicitud) {
-      const inicio = Math.max(this.ocupadoHasta, instanteSolicitud);
+    solicitar(nombreDispositivo, duracion, instanteSolicitud) {
+      const ocupadoHasta = this.ocupadoHastaPorDispositivo[nombreDispositivo] || 0;
+      const inicio = Math.max(ocupadoHasta, instanteSolicitud);
       const fin = inicio + duracion;
-      this.ocupadoHasta = fin;
+      this.ocupadoHastaPorDispositivo[nombreDispositivo] = fin;
       return { inicio, fin };
     }
   }
@@ -165,7 +176,12 @@ const SimuladorCore = (function () {
   }
 
   function copiarRafagasConRestante(rafagas) {
-    return rafagas.map((r) => ({ tipo: r.tipo, duracion: r.duracion, restante: r.duracion }));
+    return rafagas.map((r) => ({ tipo: r.tipo, duracion: r.duracion, restante: r.duracion, dispositivoIO: r.dispositivoIO }));
+  }
+
+  /** El nombre del dispositivo de E/S que usa `rafaga` — "IO" (el default de siempre) si no trae uno explícito (ejercicios de antes de que existiera esta opción). */
+  function nombreDispositivoDe(rafaga) {
+    return rafaga.dispositivoIO || "IO";
   }
 
   /** Misma lógica de "estimación inicial efectiva" que EditorProcesos.estimacionEfectiva, pero acá no se puede importar ese módulo (orden de carga de <script>), así que se repite. */
@@ -318,10 +334,11 @@ const SimuladorCore = (function () {
       miembro.estado = "terminado";
     } else {
       const siguiente = miembro.rafagas[miembro.indiceRafaga];
-      const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
+      const nombreDispositivo = nombreDispositivoDe(siguiente);
+      const { inicio, fin } = dispositivoIO.solicitar(nombreDispositivo, siguiente.duracion, instante);
       miembro.estado = "io";
       miembro.instanteFinIO = fin;
-      franjasIO.push({ proceso: miembro.id, inicio, fin });
+      franjasIO.push({ proceso: miembro.id, inicio, fin, dispositivo: nombreDispositivo });
 
       // Biblioteca "manejada por el SO": esta E/S puntual bloquea a TODO
       // el grupo, sin importar si algún otro miembro está listo — el SO no
@@ -547,7 +564,7 @@ const SimuladorCore = (function () {
     const limiteSeguridad = opciones.limiteSeguridad || 100000;
 
     const estados = crearEstadoInicial(procesos);
-    const dispositivoIO = new ColaDispositivoIO();
+    const dispositivoIO = new ColaDispositivosIO();
     const gantt = [];
     const franjasIO = [];
     const colaListosPorInstante = {};
@@ -690,10 +707,11 @@ const SimuladorCore = (function () {
             // realmente lo atiende (inicio), no desde que lo solicita: si el
             // dispositivo está ocupado, el tiempo de espera previo no se marca
             // como nada especial (es análogo a esperar en la cola de listos).
-            const { inicio, fin } = dispositivoIO.solicitar(siguiente.duracion, instante);
+            const nombreDispositivo = nombreDispositivoDe(siguiente);
+            const { inicio, fin } = dispositivoIO.solicitar(nombreDispositivo, siguiente.duracion, instante);
             e.estado = "io";
             e.instanteFinIO = fin;
-            franjasIO.push({ proceso: e.id, inicio, fin });
+            franjasIO.push({ proceso: e.id, inicio, fin, dispositivo: nombreDispositivo });
           }
           e.quantumRestante = null;
           procesoEjecutando = null;
@@ -757,7 +775,8 @@ const SimuladorCore = (function () {
   return {
     ORDEN_MOTIVO,
     ordenarColaListos,
-    ColaDispositivoIO,
+    ColaDispositivosIO,
+    nombreDispositivoDe,
     crearEstadoInicial,
     idEjecutable,
     resolverFinRafagaCompuesta,

@@ -74,6 +74,10 @@
         </div>
       </div>
       <div id="contenedor-procesos"></div>
+      <div class="fila-dispositivos-io">
+        <span class="etiqueta-dispositivos-io">Dispositivos de E/S:</span>
+        <div id="contenedor-dispositivos-io" class="contenedor-dispositivos-io"></div>
+      </div>
     </section>
 
     <section class="seccion-tu-solucion">
@@ -103,7 +107,8 @@
       </div>
       <p class="explicacion-seccion">
         Completá acá tu respuesta a mano, sin importar qué algoritmo estés practicando. Un click alterna
-        CPU → IO → nada; "+ Agregar instante" suma columnas si te quedás corto. Las filas de cola de abajo
+        CPU → E/S → nada (una vuelta por cada dispositivo de E/S que hayas agregado en "Procesos"); "+ Agregar
+        instante" suma columnas si te quedás corto. Las filas de cola de abajo
         son para armar a mano la cola de listos de cada instante — "+ Agregar cola" suma una fila más (con
         su propio nombre editable, útil por ejemplo para separar colas por prioridad) y los procesos se
         arrastran para reordenarlos o moverlos entre instantes y colas.

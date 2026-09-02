@@ -1,20 +1,30 @@
 /**
  * grilla-gantt.js — Grilla de Gantt tipo "swimlane": una fila por proceso,
- * una columna por instante de tiempo. Cada celda tiene 3 estados posibles:
- * vacía (nada), "CPU" (el proceso está ejecutando) o "IO" (el proceso está
- * haciendo entrada/salida). Se usa tanto para que el alumno complete su
- * respuesta a mano como para mostrar la solución de referencia.
+ * una columna por instante de tiempo. Cada celda tiene estado "vacía" (nada),
+ * "CPU" (el proceso está ejecutando), o el nombre de UNO de los dispositivos
+ * de E/S del ejercicio (el proceso está haciendo entrada/salida en ESE
+ * dispositivo — por defecto hay uno solo, llamado "IO", pero desde
+ * "Procesos" se pueden agregar hasta 4, cada uno con su propio nombre de
+ * hasta 3 letras; ver EditorProcesos.renderizarDispositivosIO en main.js).
+ * Se usa tanto para que el alumno complete su respuesta a mano como para
+ * mostrar la solución de referencia (que, al venir del motor de simulación,
+ * nunca distingue dispositivos: siempre usa el nombre genérico "IO").
  *
- * Reglas de exclusión mutua (una sola CPU, un solo dispositivo de IO):
- * en una misma columna (mismo instante), a lo sumo UNA celda puede estar en
- * "CPU" y a lo sumo UNA puede estar en "IO" — pero sí pueden coexistir un
- * proceso en CPU y otro distinto en IO al mismo tiempo. Al marcar una celda
- * como CPU (o IO), cualquier otra celda de esa misma columna que ya tuviera
- * ese mismo estado se libera automáticamente.
+ * Reglas de exclusión mutua (una sola CPU, un dispositivo puede atender un
+ * solo proceso a la vez): en una misma columna (mismo instante), a lo sumo
+ * UNA celda debería estar en "CPU" y, por cada dispositivo de E/S, a lo sumo
+ * UNA debería estar en ESE dispositivo — pero sí pueden coexistir un proceso
+ * en CPU y otros procesos distintos en E/S (incluso en dispositivos
+ * distintos) al mismo tiempo. Esto NO se fuerza borrando datos: si el
+ * alumno marca dos celdas de la misma columna con el mismo estado, ambas se
+ * resaltan en rojo (ver `revisarConflictosColumna`) para que lo resuelva a
+ * mano, en vez de perder sin querer una respuesta ya completada mientras
+ * recorre el ciclo de estados con clicks.
  *
- * Interacción: cada click sobre una celda avanza un paso en el ciclo
- * vacío → CPU → IO → vacío → … Todos los clicks se tratan igual (no hay
- * click simple vs. doble click).
+ * Interacción (solo en la grilla editable del alumno): cada click sobre una
+ * celda avanza un paso en el ciclo vacío → CPU → IO₁ → IO₂ → … → vacío → …
+ * (un paso por cada dispositivo de E/S configurado). Todos los clicks se
+ * tratan igual (no hay click simple vs. doble click).
  *
  * La grilla del alumno (no la solución, que es de solo lectura y de
  * duración fija) además permite agregar columnas: el ejercicio puede
@@ -33,7 +43,6 @@ const GrillaGantt = (function () {
   "use strict";
 
   const CANTIDAD_COLORES = 8;
-  const ORDEN_ESTADOS = ["", "CPU", "IO"];
   // Dos columnas de etiqueta: la primera es el proceso (se agranda con
   // rowspan para cubrir las filas de sus hilos), la segunda es el hilo
   // puntual (solo tiene contenido en filas de hilos agregados).
@@ -112,7 +121,7 @@ const GrillaGantt = (function () {
       for (let t = bloque.inicio; t < bloque.fin; t++) datos[bloque.proceso][t] = "CPU";
     });
     (resultado.franjasIO || []).forEach((franja) => {
-      for (let t = franja.inicio; t < franja.fin; t++) datos[franja.proceso][t] = "IO";
+      for (let t = franja.inicio; t < franja.fin; t++) datos[franja.proceso][t] = franja.dispositivo || "IO";
     });
 
     return { datos, duracionTotal };
@@ -193,6 +202,13 @@ const GrillaGantt = (function () {
     celda.appendChild(marca);
   }
 
+  /**
+   * `estado` es "CPU", "" (vacío), o el nombre de un dispositivo de E/S
+   * (siempre "IO" en las grillas de solución, que no distinguen
+   * dispositivos; puede ser "IO", "IO1", "IO2"... en la grilla editable del
+   * alumno — ver el comentario del módulo). Cualquier estado que no sea
+   * "CPU" ni vacío se pinta como "en E/S", sea cual sea su nombre.
+   */
   function aplicarEstadoCelda(celda, estado, coloresProcesos) {
     celda.classList.remove("celda-vacia", "celda-cpu", "celda-io");
     Array.from(celda.classList)
@@ -205,29 +221,68 @@ const GrillaGantt = (function () {
     if (estado === "CPU") {
       celda.classList.add("celda-cpu");
       if (coloresProcesos) celda.classList.add(coloresProcesos[celda.dataset.proceso]);
-    } else if (estado === "IO") {
+    } else if (estado) {
       celda.classList.add("celda-io");
     } else {
       celda.classList.add("celda-vacia");
     }
   }
 
-  /** Aplica `nuevoEstado` a `celda`, liberando primero cualquier otra celda
-   * de la misma columna que tuviera ese mismo estado (exclusión mutua). */
-  function aplicarEstadoConExclusion(celda, nuevoEstado, celdasDeLaColumna, coloresProcesos) {
-    if (nuevoEstado === "CPU" || nuevoEstado === "IO") {
-      celdasDeLaColumna.forEach((otra) => {
-        if (otra !== celda && otra.dataset.estado === nuevoEstado) aplicarEstadoCelda(otra, "", coloresProcesos);
+  /**
+   * Resalta en rojo cualquier grupo de 2+ celdas de la MISMA columna que
+   * comparta el mismo estado no vacío (dos procesos en CPU a la vez, o dos
+   * en el mismo dispositivo de E/S — solo el nombre exacto cuenta como el
+   * MISMO recurso, así que "IO1" e "IO2" nunca conflictúan entre sí). Antes
+   * esto se resolvía borrando automáticamente a "la otra" celda, pero eso
+   * podía borrar sin querer una respuesta ya completada mientras se
+   * recorría el ciclo de estados con clicks — ahora el conflicto se deja a
+   * la vista (sin tocar ningún dato) para que el alumno lo resuelva a mano.
+   */
+  function revisarConflictosColumna(celdasDeLaColumna) {
+    const celdasPorEstado = {};
+    celdasDeLaColumna.forEach((celda) => {
+      const estado = celda.dataset.estado;
+      if (!estado) return;
+      (celdasPorEstado[estado] = celdasPorEstado[estado] || []).push(celda);
+    });
+
+    celdasDeLaColumna.forEach((celda) => {
+      celda.classList.remove("celda-conflicto-mutex");
+      celda.title = "";
+    });
+    Object.values(celdasPorEstado).forEach((celdas) => {
+      if (celdas.length < 2) return;
+      celdas.forEach((celda) => {
+        celda.classList.add("celda-conflicto-mutex");
+        celda.title = "Dos procesos marcados con el mismo estado en este instante — solo uno puede estar acá a la vez.";
       });
-    }
-    aplicarEstadoCelda(celda, nuevoEstado, coloresProcesos);
+    });
   }
 
-  function habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos) {
+  /** Aplica `nuevoEstado` a `celda` y vuelve a revisar conflictos de mutex en toda su columna (ver `revisarConflictosColumna`). */
+  function aplicarEstadoYRevisarConflictos(celda, nuevoEstado, celdasDeLaColumna, coloresProcesos) {
+    aplicarEstadoCelda(celda, nuevoEstado, coloresProcesos);
+    revisarConflictosColumna(celdasDeLaColumna);
+  }
+
+  /**
+   * @param {Function} obtenerOrdenEstados - () => string[], el ciclo de
+   *        estados vigente EN EL MOMENTO DEL CLICK (no se congela al crear
+   *        la grilla): típicamente `["", "CPU", ...nombresDispositivosIO]`.
+   *        Se vuelve a pedir en cada click para que agregar/quitar/renombrar
+   *        un dispositivo de E/S (ver EditorProcesos.renderizarDispositivosIO)
+   *        afecte los PRÓXIMOS clicks sin tener que reconstruir la grilla ni
+   *        perder lo que el alumno ya completó.
+   */
+  function habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos, obtenerOrdenEstados) {
     celda.addEventListener("click", () => {
-      const indiceActual = ORDEN_ESTADOS.indexOf(celda.dataset.estado || "");
-      const nuevoEstado = ORDEN_ESTADOS[(indiceActual + 1) % ORDEN_ESTADOS.length];
-      aplicarEstadoConExclusion(celda, nuevoEstado, celdasDeLaColumna, coloresProcesos);
+      const orden = obtenerOrdenEstados();
+      const indiceActual = orden.indexOf(celda.dataset.estado || "");
+      // Si el estado actual ya no existe en el ciclo (ej. se quitó el
+      // dispositivo de E/S que esta celda tenía marcado), el próximo click
+      // la manda a vacío en vez de romper o trabarse en un estado fantasma.
+      const siguienteIndice = indiceActual === -1 ? 0 : (indiceActual + 1) % orden.length;
+      aplicarEstadoYRevisarConflictos(celda, orden[siguienteIndice], celdasDeLaColumna, coloresProcesos);
     });
   }
 
@@ -252,6 +307,9 @@ const GrillaGantt = (function () {
       columnaExtra,
       tooltipsPorProceso,
       marcadoresPorProceso,
+      // Solo se usa (y solo hace falta pasarlo) cuando `editable` es true —
+      // ver el JSDoc de `habilitarInteraccion`.
+      obtenerOrdenEstados,
     } = opciones;
     contenedor.innerHTML = "";
 
@@ -608,7 +666,7 @@ const GrillaGantt = (function () {
         const razonTransicion = marcadoresPorProceso && marcadoresPorProceso[carril.id] && marcadoresPorProceso[carril.id][t];
         if (razonTransicion) aplicarMarcadorTransicion(celda, razonTransicion);
 
-        if (editable) habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos);
+        if (editable) habilitarInteraccion(celda, celdasDeLaColumna, coloresProcesos, obtenerOrdenEstados);
 
         grilla.appendChild(celda);
         celdasDeLaColumna.push(celda);
@@ -702,6 +760,12 @@ const GrillaGantt = (function () {
             aplicarEstadoCelda(celda, valores[t] || "", coloresProcesos);
           });
         });
+
+        // El archivo importado podría traer, de por sí, dos procesos en el
+        // mismo estado en el mismo instante (ej. editado a mano, o de un
+        // ejercicio con otra cantidad de dispositivos de E/S) — se resalta
+        // igual que si el conflicto lo hubiera creado un click.
+        celdasPorInstante.forEach((columna) => revisarConflictosColumna(columna));
       },
       /** Snapshot de las colas armadas a mano — { nombre, porInstante: [[id,...], ...] } por cola. */
       obtenerColas: () =>
@@ -737,14 +801,22 @@ const GrillaGantt = (function () {
     };
   }
 
-  /** Grilla en blanco para que la complete el alumno (con botón para agregar instantes). */
-  function crearGrillaInteractiva(contenedor, procesos, duracionInicial, coloresProcesos) {
+  /**
+   * Grilla en blanco para que la complete el alumno (con botón para agregar
+   * instantes).
+   *
+   * @param {?Function} [obtenerOrdenEstados] - ver el JSDoc de
+   *        `habilitarInteraccion`. Si no se pasa, el ciclo por defecto es
+   *        vacío → CPU → IO → vacío (un único dispositivo genérico).
+   */
+  function crearGrillaInteractiva(contenedor, procesos, duracionInicial, coloresProcesos, obtenerOrdenEstados) {
     return crearGrillaSwimlane(contenedor, {
       procesos,
       duracionInicial,
       editable: true,
       datosPorProceso: null,
       coloresProcesos,
+      obtenerOrdenEstados: obtenerOrdenEstados || (() => ["", "CPU", "IO"]),
     });
   }
 

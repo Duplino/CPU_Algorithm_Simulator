@@ -139,6 +139,17 @@
     procesos: [],
     bloques: [],
     grillaSolucion: null, // controlador de la única grilla interactiva de "Tu Solución" (incluye la fila de cola)
+    // Dispositivos de E/S del ejercicio (compartidos por todos los
+    // procesos, no por proceso — ver EditorProcesos.renderizarDispositivosIO).
+    // Arranca con uno solo, sin nombre editable: se etiqueta "IO", como
+    // siempre. Cada ráfaga de E/S de la tabla de "Procesos" elige CON CUÁL
+    // se hace (rafaga.dispositivoIO, solo editable cuando hay 2+ — ver
+    // EditorProcesos.crearSelectorDispositivoRafaga) y el motor de
+    // simulación arma una cola FIFO independiente por dispositivo (ver
+    // SimuladorCore.ColaDispositivosIO): dos ráfagas en dispositivos
+    // distintos se atienden en paralelo de verdad, así que las soluciones de
+    // referencia (y "Corregir" contra ellas) sí distinguen dispositivos.
+    dispositivosIO: [{ nombre: "IO" }],
   };
 
   let contadorBloques = 0;
@@ -150,11 +161,34 @@
   function renderizarProcesos() {
     const contenedor = document.getElementById("contenedor-procesos");
     EditorProcesos.renderizarTablaProcesos(contenedor, estado.procesos, {
+      dispositivosIO: estado.dispositivosIO,
       onCambio: () => {
         // Cambiar los procesos redefine el ejercicio entero: se reconstruye
         // "Tu Solución" desde cero (las filas dependen de qué procesos hay)
-        // y se recalculan todos los algoritmos agregados.
+        // y se recalculan todos los algoritmos agregados. También cubre el
+        // caso de que una ráfaga se haya autocorregido a otro dispositivo
+        // (ver crearSelectorDispositivoRafaga): las soluciones dependen de
+        // eso, así que hay que recalcularlas igual.
         renderizarSeccionSolucion();
+        recalcularTodosLosBloques();
+      },
+    });
+  }
+
+  /**
+   * A diferencia del ciclo de estados de "Tu Solución" (que relee la lista
+   * de dispositivos en vivo, sin reconstruir nada — ver
+   * `obtenerOrdenEstadosCelda`), agregar/quitar/renombrar un dispositivo SÍ
+   * puede cambiar el resultado real de la simulación (cada ráfaga de E/S usa
+   * un dispositivo puntual — ver SimuladorCore.ColaDispositivosIO) y el
+   * dropdown de cada ráfaga en "Procesos" (ver crearSelectorDispositivoRafaga),
+   * así que hace falta re-renderizar ambos.
+   */
+  function renderizarDispositivosIO() {
+    const contenedor = document.getElementById("contenedor-dispositivos-io");
+    EditorProcesos.renderizarDispositivosIO(contenedor, estado.dispositivosIO, {
+      onCambio: () => {
+        renderizarProcesos();
         recalcularTodosLosBloques();
       },
     });
@@ -176,11 +210,22 @@
     return Math.max(1, ...finesHilos);
   }
 
+  /** El ciclo de estados que recorre un click en una celda de "Tu Solución" — ver GrillaGantt.habilitarInteraccion. */
+  function obtenerOrdenEstadosCelda() {
+    return ["", "CPU", ...estado.dispositivosIO.map((d) => d.nombre)];
+  }
+
   function renderizarSeccionSolucion() {
     const contenedorGrilla = document.getElementById("contenedor-grilla-solucion");
     const colores = GrillaGantt.asignarColoresProcesos(estado.procesos);
     const duracionInicial = calcularDuracionInicialSugerida(estado.procesos);
-    estado.grillaSolucion = GrillaGantt.crearGrillaInteractiva(contenedorGrilla, estado.procesos, duracionInicial, colores);
+    estado.grillaSolucion = GrillaGantt.crearGrillaInteractiva(
+      contenedorGrilla,
+      estado.procesos,
+      duracionInicial,
+      colores,
+      obtenerOrdenEstadosCelda
+    );
   }
 
   // ----------------------------------------------------------------------
@@ -542,7 +587,7 @@
       arribo: h && h.arribo != null ? Math.max(0, Number(h.arribo) || 0) : 0,
       rafagas:
         h && Array.isArray(h.rafagas) && h.rafagas.length > 0
-          ? h.rafagas.map((r) => ({ tipo: r && r.tipo === "IO" ? "IO" : "CPU", duracion: Math.max(1, Number(r && r.duracion) || 1) }))
+          ? h.rafagas.map(normalizarRafagaImportada)
           : [{ tipo: "CPU", duracion: 1 }],
     }));
     return {
@@ -554,10 +599,35 @@
     };
   }
 
+  /** Normaliza una ráfaga "cruda" del .json importado; a las de E/S les asigna el dispositivo que traiga (o "IO" si no trae ninguno — ejercicios de antes de que existiera esta opción). */
+  function normalizarRafagaImportada(r) {
+    const tipo = r && r.tipo === "IO" ? "IO" : "CPU";
+    const rafaga = { tipo, duracion: Math.max(1, Number(r && r.duracion) || 1) };
+    if (tipo === "IO") {
+      rafaga.dispositivoIO = (r && r.dispositivoIO ? String(r.dispositivoIO).trim().toUpperCase().slice(0, 3) : "") || "IO";
+    }
+    return rafaga;
+  }
+
+  /** Normaliza la lista de dispositivos de E/S "cruda" del .json importado; sin datos válidos, vuelve al único dispositivo "IO" de siempre. */
+  function normalizarDispositivosImportados(crudos) {
+    if (!Array.isArray(crudos) || crudos.length === 0) return [{ nombre: "IO" }];
+    return crudos.slice(0, 4).map((d, i) => ({
+      nombre: (d && d.nombre ? String(d.nombre).trim().toUpperCase().slice(0, 3) : "") || `IO${i + 1}`,
+    }));
+  }
+
   function importarDatos(datos) {
     if (!datos || !Array.isArray(datos.procesos) || datos.procesos.length === 0) {
       throw new Error("El archivo no tiene un array de \"procesos\" válido.");
     }
+    // Los dispositivos de E/S se importan ANTES que los procesos: las
+    // ráfagas de E/S de cada proceso referencian dispositivos por nombre
+    // (ver normalizarRafagaImportada), así que hace falta tenerlos ya
+    // configurados para que el dropdown de cada ráfaga (ver
+    // EditorProcesos.crearSelectorDispositivoRafaga) los muestre bien.
+    estado.dispositivosIO = normalizarDispositivosImportados(datos.dispositivosIO);
+    renderizarDispositivosIO();
     cargarProcesos(datos.procesos.map(normalizarProcesoImportado));
   }
 
@@ -606,7 +676,7 @@
       return;
     }
     const nombre = prompt("Nombre del ejercicio:", "Mi ejercicio") || "ejercicio";
-    descargarJSON({ nombre, procesos: estado.procesos }, nombre);
+    descargarJSON({ nombre, procesos: estado.procesos, dispositivosIO: estado.dispositivosIO }, nombre);
   }
 
   // ----------------------------------------------------------------------
@@ -734,6 +804,7 @@
 
   function inicializar() {
     inicializarTema();
+    renderizarDispositivosIO();
 
     const inputProcesosArchivo = document.getElementById("input-cargar-procesos-archivo");
     document.getElementById("boton-cargar-procesos-archivo").addEventListener("click", () => inputProcesosArchivo.click());
