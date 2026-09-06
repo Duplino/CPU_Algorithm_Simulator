@@ -1,0 +1,115 @@
+{
+  "nombre": "2026-1g",
+  "respuesta": {
+    "A.1": [
+      "CPU",
+      "CPU",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "CPU",
+      "CPU",
+      "IO",
+      "CPU"
+    ],
+    "B.1": [
+      null,
+      null,
+      "CPU",
+      "IO",
+      "IO",
+      "CPU",
+      "CPU",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "C.1": [
+      null,
+      null,
+      null,
+      "CPU",
+      "CPU",
+      "IO",
+      null,
+      "CPU",
+      "CPU",
+      null,
+      null,
+      "CPU",
+      null
+    ]
+  },
+  "colas": [
+    {
+      "nombre": "RR Q=2",
+      "porInstante": [
+        [],
+        [
+          "B",
+          "C"
+        ],
+        [
+          "C"
+        ],
+        [
+          "B"
+        ],
+        [
+          "B"
+        ],
+        [],
+        [
+          "C"
+        ],
+        [],
+        [],
+        [],
+        [],
+        [],
+        []
+      ]
+    },
+    {
+      "nombre": "FIFO",
+      "porInstante": [
+        [],
+        [],
+        [
+          "A"
+        ],
+        [
+          "A"
+        ],
+        [
+          "A"
+        ],
+        [
+          "A"
+        ],
+        [
+          "A"
+        ],
+        [
+          "A"
+        ],
+        [
+          "A"
+        ],
+        [
+          "C"
+        ],
+        [],
+        [],
+        []
+      ]
+    }
+  ]
+}

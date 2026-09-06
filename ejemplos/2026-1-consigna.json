@@ -1,0 +1,94 @@
+{
+  "nombre": "2026-1",
+  "procesos": [
+    {
+      "id": "A",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 0,
+          "rafagas": [
+            {
+              "tipo": "CPU",
+              "duracion": 4
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1,
+              "dispositivoIO": "IO"
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 1,
+          "rafagas": [
+            {
+              "tipo": "CPU",
+              "duracion": 1
+            },
+            {
+              "tipo": "IO",
+              "duracion": 2,
+              "dispositivoIO": "IO"
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "prioridad": 1,
+      "estimacionInicial": null,
+      "algoritmoBiblioteca": null,
+      "hilos": [
+        {
+          "id": "1",
+          "tipo": "KLT",
+          "arribo": 1,
+          "rafagas": [
+            {
+              "tipo": "CPU",
+              "duracion": 2
+            },
+            {
+              "tipo": "IO",
+              "duracion": 1,
+              "dispositivoIO": "IO"
+            },
+            {
+              "tipo": "CPU",
+              "duracion": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "dispositivosIO": [
+    {
+      "nombre": "IO"
+    }
+  ]
+}
