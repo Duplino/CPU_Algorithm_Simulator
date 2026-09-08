@@ -93,6 +93,13 @@ function simularRoundRobinVirtual(procesos, opciones) {
       }
     }
 
+    // 2.1) Planificación INTERNA de una unidad compuesta (biblioteca ULT
+    //      "biblioteca" con algoritmo "srtf") — invisible para el SO, ver
+    //      el mismo paso en simulador-core.js.
+    if (procesoEjecutando && procesoEjecutando.esCompuesta) {
+      SimuladorCore.resolverPreempcionInternaCompuesta(procesoEjecutando, instante);
+    }
+
     // 3) Cola de listos para la UI. Acá no hay una única cola: se registran
     //    las dos por separado (reingreso y normal), sin el proceso que está
     //    ejecutando (ni el que está en IO, que ni siquiera está en `listos`).
@@ -128,6 +135,7 @@ function simularRoundRobinVirtual(procesos, opciones) {
     // habiendo usado el quantum entero), eso determina por qué cola
     // reingresa al volver de la IO — ver más abajo.
     let agotoQuantumEsteTick = false;
+    let terminoRafagaEsteTick = false;
 
     if (procesoEjecutando) {
       const e = procesoEjecutando;
@@ -137,10 +145,10 @@ function simularRoundRobinVirtual(procesos, opciones) {
       e.quantumRestante -= 1;
       agotoQuantumEsteTick = e.quantumRestante === 0;
 
-      const terminoRafaga = rafagaActual.restante === 0;
-      const agotoQuantum = !terminoRafaga && agotoQuantumEsteTick;
+      terminoRafagaEsteTick = rafagaActual.restante === 0;
+      const agotoQuantum = !terminoRafagaEsteTick && agotoQuantumEsteTick;
 
-      if (terminoRafaga) transicion = "fin-rafaga";
+      if (terminoRafagaEsteTick) transicion = "fin-rafaga";
       else if (agotoQuantum) transicion = "fin-quantum";
     } else {
       gantt.push({ proceso: null, inicio: instante, fin: instante + 1, tipo: "IDLE" });
@@ -152,6 +160,13 @@ function simularRoundRobinVirtual(procesos, opciones) {
 
     instante += 1;
 
+    // 4.1) Planificación INTERNA de una unidad compuesta (biblioteca ULT
+    //      "biblioteca" con algoritmo "round-robin") — invisible para el
+    //      SO, ver el mismo paso en simulador-core.js.
+    if (procesoEjecutando && procesoEjecutando.esCompuesta) {
+      SimuladorCore.resolverQuantumInternoCompuesta(procesoEjecutando, terminoRafagaEsteTick, instante);
+    }
+
     // 5) Resolver, ya en el nuevo instante, la transición del proceso que ocupó la CPU.
     if (transicion === "fin-rafaga") {
       const e = procesoEjecutando;
@@ -160,7 +175,17 @@ function simularRoundRobinVirtual(procesos, opciones) {
         // otro hilo del mismo proceso puede seguir de inmediato, el SO ni
         // se entera (no pasa por el planificador ni toca el quantum).
         const resultado = SimuladorCore.resolverFinRafagaCompuesta(e, dispositivoIO, instante, franjasIO, null, null);
-        if (resultado === "terminada") {
+        if (resultado === "sigue" && terminoRafagaEsteTick && agotoQuantumEsteTick) {
+          // Otro hilo de la biblioteca sigue listo (el cambio en sí es
+          // invisible para el SO), PERO el quantum del proceso, como un
+          // todo, se agotó justo en este mismo tick — el SO le devuelve la
+          // CPU igual, como un fin de quantum normal (motivo "desalojado",
+          // vuelve por la cola normal con un quantum nuevo la próxima
+          // vez). Al retomar, sigue con el hilo que "sigue" ya dejó activo.
+          marcarListo(e, "desalojado");
+          e.quantumRestante = null;
+          procesoEjecutando = null;
+        } else if (resultado === "terminada") {
           e.estado = "terminado";
           e.instanteTerminacion = instante;
           e.quantumRestante = null;

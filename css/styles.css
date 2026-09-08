@@ -457,6 +457,29 @@ main {
   padding: 0.2rem 0.3rem;
 }
 
+/* El selector del algoritmo interno de la biblioteca (solo con "Manejada
+   por la biblioteca") va apilado debajo del de biblioteca ULT, con su
+   propio separador — misma lógica de "todo en la misma celda, sin fila
+   nueva" que ese (ver crearSelectorPlanificacionBiblioteca). */
+.selector-planificacion-biblioteca {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--linea-sutil);
+}
+
+.selector-planificacion-biblioteca select {
+  width: 100%;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.3rem;
+}
+
+.input-quantum-biblioteca {
+  width: 100%;
+  margin-top: 0.25rem;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.3rem;
+}
+
 /* ---------------------------------------------------------------------
    Bloques de algoritmo
 --------------------------------------------------------------------- */

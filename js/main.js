@@ -595,6 +595,15 @@
       prioridad: p && p.prioridad != null ? Number(p.prioridad) : 1,
       estimacionInicial: p && p.estimacionInicial != null ? Number(p.estimacionInicial) : null,
       algoritmoBiblioteca: p && p.algoritmoBiblioteca ? p.algoritmoBiblioteca : null,
+      // Solo tiene sentido con algoritmoBiblioteca === "biblioteca" — igual
+      // se normaliza siempre que venga, por si el archivo trae basura.
+      planificacionBiblioteca:
+        p && p.planificacionBiblioteca && p.planificacionBiblioteca.algoritmo
+          ? {
+              algoritmo: String(p.planificacionBiblioteca.algoritmo),
+              quantum: Math.max(1, Number(p.planificacionBiblioteca.quantum) || 1),
+            }
+          : null,
       hilos,
     };
   }

@@ -46,18 +46,37 @@ const EditorProcesos = (function () {
   // Las tres formas de manejar una E/S bloqueante de un hilo ULT:
   //   - "so": sin ningún manejo especial, la llamada va directo al SO, que
   //     no distingue hilos — bloquea a TODO el proceso (y por lo tanto a
-  //     todos sus hilos ULT hermanos) hasta que esa E/S puntual termina.
-  //   - "biblioteca": la biblioteca ULT usa llamadas no bloqueantes y
-  //     administra ella misma la espera, así que un hilo en E/S no bloquea
-  //     a sus hermanos.
+  //     todos sus hilos ULT hermanos) hasta que esa E/S puntual termina, y
+  //     ahí retoma el MISMO hilo que se había ido — la biblioteca no
+  //     interviene en ese vaivén, solo se la llama para crear o terminar
+  //     un hilo (con un orden simple, sin nada configurable).
+  //   - "biblioteca": mismo bloqueo que "so" (la llamada también llega tal
+  //     cual al SO), pero acá la biblioteca SÍ decide, con su propio
+  //     algoritmo (ver crearSelectorPlanificacionBiblioteca), a cuál de
+  //     sus hilos ULT listos le da la CPU cada vez que le toca elegir.
   //   - "jacketing": una capa que intercepta las llamadas bloqueantes y las
-  //     traduce a no bloqueantes — mismo resultado que "biblioteca" (los
-  //     hermanos no quedan bloqueados), pero por un mecanismo distinto.
+  //     vuelve no bloqueantes — cuando un hilo pide E/S, el grupo NO se
+  //     bloquea: sigue corriendo de inmediato con el siguiente hilo que
+  //     elija la biblioteca (mismo algoritmo configurable que "biblioteca").
   const OPCIONES_ALGORITMO_BIBLIOTECA = [
     { valor: "so", etiqueta: "Manejada por el SO" },
     { valor: "biblioteca", etiqueta: "Manejada por la biblioteca" },
     { valor: "jacketing", etiqueta: "Jacketing" },
   ];
+
+  // Con "Manejada por la biblioteca", la biblioteca ULT necesita SU PROPIO
+  // criterio para decidir, de entre sus hilos ULT listos, cuál corre —
+  // exactamente el mismo tipo de decisión que toma el SO entre procesos,
+  // pero un nivel más abajo (para el SO, el proceso es una unidad única; el
+  // reparto ENTRE sus hilos es asunto interno de la biblioteca). Sin
+  // estimaciones: acá siempre se usa la duración real de la ráfaga.
+  const OPCIONES_ALGORITMO_PLANIFICACION_BIBLIOTECA = [
+    { valor: "fifo", etiqueta: "FIFO" },
+    { valor: "sjf", etiqueta: "SJF" },
+    { valor: "srtf", etiqueta: "SRTF" },
+    { valor: "round-robin", etiqueta: "Round Robin" },
+  ];
+  const VALOR_POR_DEFECTO_PLANIFICACION_BIBLIOTECA = { algoritmo: "fifo", quantum: 2 };
 
   function tipoRafagaEnIndice(indice) {
     return indice % 2 === 0 ? "CPU" : "IO";
@@ -101,6 +120,10 @@ const EditorProcesos = (function () {
       prioridad: 1,
       estimacionInicial: null,
       algoritmoBiblioteca: null,
+      // Solo se usa (y se completa con un valor por defecto) cuando
+      // algoritmoBiblioteca es "biblioteca" o "jacketing" — ver
+      // crearSelectorBibliotecaUlt.
+      planificacionBiblioteca: null,
       hilos: [crearHiloVacio("1", 0)],
     };
   }
@@ -305,6 +328,68 @@ const EditorProcesos = (function () {
     });
     contenedor.appendChild(select);
 
+    // El reparto ENTRE los hilos ULT es una decisión propia de la
+    // biblioteca tanto con "Manejada por la biblioteca" como con
+    // "Jacketing" (la diferencia entre esas dos es solo si una E/S bloquea
+    // al grupo o no) — con "SO" no hay nada que configurar: ese modo no
+    // consulta ningún algoritmo propio.
+    if (proceso.algoritmoBiblioteca === "biblioteca" || proceso.algoritmoBiblioteca === "jacketing") {
+      contenedor.appendChild(crearSelectorPlanificacionBiblioteca(proceso, alCambiar));
+    }
+
+    return contenedor;
+  }
+
+  /**
+   * Selector de CÓMO reparte la biblioteca ULT la CPU entre los hilos ULT
+   * listos de un mismo proceso (aplica con "Manejada por la biblioteca" y
+   * con "Jacketing" — ver crearSelectorBibliotecaUlt). Es, para esos
+   * hilos, el mismo tipo de decisión que toma el algoritmo elegido en "Ver
+   * algoritmos" para los procesos: acá el SO ve un único proceso, así que
+   * hay un algoritmo del SO (afuera) y, adentro, este algoritmo de la
+   * biblioteca para sus hilos.
+   */
+  function crearSelectorPlanificacionBiblioteca(proceso, alCambiar) {
+    if (!proceso.planificacionBiblioteca) {
+      proceso.planificacionBiblioteca = { ...VALOR_POR_DEFECTO_PLANIFICACION_BIBLIOTECA };
+    }
+
+    const contenedor = document.createElement("div");
+    contenedor.className = "selector-planificacion-biblioteca";
+
+    const etiqueta = document.createElement("span");
+    etiqueta.className = "etiqueta-biblioteca-ult";
+    etiqueta.textContent = "Algoritmo de la biblioteca";
+    contenedor.appendChild(etiqueta);
+
+    const select = document.createElement("select");
+    select.title = "Cómo reparte la biblioteca la CPU entre los hilos ULT listos de este proceso";
+    OPCIONES_ALGORITMO_PLANIFICACION_BIBLIOTECA.forEach((opcion) => {
+      const option = document.createElement("option");
+      option.value = opcion.valor;
+      option.textContent = opcion.etiqueta;
+      if (opcion.valor === proceso.planificacionBiblioteca.algoritmo) option.selected = true;
+      select.appendChild(option);
+    });
+    select.addEventListener("change", () => {
+      proceso.planificacionBiblioteca.algoritmo = select.value;
+      alCambiar();
+    });
+    contenedor.appendChild(select);
+
+    // El quantum solo importa para Round Robin — se agrega/saca del layout
+    // en vez de deshabilitarlo, para no dejar un campo inútil a la vista.
+    if (proceso.planificacionBiblioteca.algoritmo === "round-robin") {
+      const inputQuantum = crearInputNumero(proceso.planificacionBiblioteca.quantum, (valor) => {
+        proceso.planificacionBiblioteca.quantum = Math.max(1, valor || 1);
+        alCambiar();
+      });
+      inputQuantum.min = "1";
+      inputQuantum.title = "Quantum interno de la biblioteca (Round Robin)";
+      inputQuantum.className += " input-quantum-biblioteca";
+      contenedor.appendChild(inputQuantum);
+    }
+
     return contenedor;
   }
 
@@ -377,9 +462,12 @@ const EditorProcesos = (function () {
           // Debajo del ID, EN LA MISMA celda (no una fila nueva): así
           // aparecer/desaparecer al alternar un hilo entre KLT y ULT no
           // hace crecer la tabla entera ni corre de lugar a los procesos
-          // de abajo — ver crearSelectorBibliotecaUlt.
+          // de abajo — ver crearSelectorBibliotecaUlt. Usa `marcarCambio`
+          // (no solo `onCambio`) porque elegir "Manejada por la
+          // biblioteca" tiene que hacer aparecer, EN EL ACTO, el segundo
+          // selector del algoritmo interno (ver crearSelectorPlanificacionBiblioteca).
           if (tieneULT) {
-            tdId.appendChild(crearSelectorBibliotecaUlt(proceso, () => onCambio(procesos)));
+            tdId.appendChild(crearSelectorBibliotecaUlt(proceso, marcarCambio));
           }
 
           fila.appendChild(tdId);

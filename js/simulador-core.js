@@ -121,12 +121,23 @@ const SimuladorCore = (function () {
    *     proceso (ej. un hilo que se crea recién cuando el proceso ya lleva
    *     un rato corriendo).
    *   - Los hilos ULT de UN MISMO proceso comparten una única unidad
-   *     COMPUESTA: el SO solo ve y planifica al proceso como un todo, y
-   *     mientras lo tiene, la biblioteca ULT decide internamente (round
-   *     robin simple entre sus hilos ULT listos) cuál ejecuta. Gracias a
-   *     que la biblioteca usa Jacketing o llamadas no bloqueantes, un hilo
-   *     ULT que pide IO no bloquea a sus hermanos: la unidad compuesta
-   *     sigue lista mientras tenga al menos un hilo ULT sin IO pendiente.
+   *     COMPUESTA: el SO solo ve y planifica al proceso como un todo. Cómo
+   *     se comporta puertas adentro depende de la biblioteca ULT del
+   *     proceso (ver `bloqueaGrupo` y `planificacionInterna`):
+   *       - "so": la biblioteca solo se llama para crear o terminar un
+   *         hilo (elige con orden simple); una E/S bloqueante de CUALQUIER
+   *         hilo bloquea a TODO el grupo (llega tal cual al SO, que no
+   *         distingue hilos) hasta que esa E/S puntual termina, y ahí
+   *         retoma el MISMO hilo que se había ido — la biblioteca ni se
+   *         entera de ese vaivén.
+   *       - "biblioteca": mismo bloqueo que "so" (la llamada también llega
+   *         tal cual al SO), pero la biblioteca reparte la CPU entre sus
+   *         hilos ULT listos con el algoritmo que se le configuró (FIFO,
+   *         SJF, SRTF o Round Robin — ver planificacionInterna).
+   *       - "jacketing": intercepta la llamada y la vuelve NO bloqueante —
+   *         cuando un hilo pide E/S, el grupo sigue corriendo de inmediato
+   *         con el siguiente hilo que elija la biblioteca (mismo algoritmo
+   *         configurable que "biblioteca").
    *     Como cada miembro también puede tener su propio arribo, la unidad
    *     compuesta "arriba" por primera vez con el MÁS TEMPRANO de sus
    *     miembros — el resto se suma al grupo más tarde, en su propio
@@ -252,6 +263,11 @@ const SimuladorCore = (function () {
         indiceRafaga: 0,
         estado: "no-llegado", // no-llegado | listo | io | terminado
         instanteFinIO: null,
+        // Para el desempate FIFO entre miembros LISTOS (ver
+        // compararOrdenLlegadaMiembro) — análogos a instanteEntradaAListos/
+        // ordenEncolado de una unidad, pero internos a esta biblioteca.
+        instanteEntradaAListos: null,
+        ordenEncoladoInterno: null,
       }));
       // Placeholder inicial e inerte: nada lo lee hasta que la unidad
       // compuesta deja de estar "nuevo" (resolverArribosDeMiembros
@@ -260,14 +276,33 @@ const SimuladorCore = (function () {
       return {
         ...base,
         esCompuesta: true,
-        // "so": el SO no distingue hilos, así que la E/S de CUALQUIER
+        // "so" y "biblioteca": la llamada bloqueante de E/S llega tal cual
+        // al SO, que no distingue hilos — así que la E/S de CUALQUIER
         // miembro bloquea a todo el grupo hasta que esa E/S puntual
         // termina (ver resolverFinRafagaCompuesta/resolverRetornosDeIOCompuestos).
-        // "biblioteca"/"jacketing": un hilo en E/S no bloquea a sus
-        // hermanos — ambas producen el mismo resultado simulado, solo
-        // difiere el mecanismo con el que se logra.
-        bloqueaGrupo: u.proceso.algoritmoBiblioteca === "so",
+        // "jacketing" intercepta la llamada y la vuelve no bloqueante: un
+        // hilo que pide E/S no se lleva puesto al resto — el grupo sigue
+        // corriendo con el siguiente hilo que decida la biblioteca (ver
+        // planificacionInterna, más abajo — resolverFinRafagaCompuesta cae
+        // directo a elegirMejorMiembroListo cuando bloqueaGrupo es false,
+        // sin pasar por el SO).
+        bloqueaGrupo: u.proceso.algoritmoBiblioteca === "so" || u.proceso.algoritmoBiblioteca === "biblioteca",
         miembroBloqueanteId: null,
+        // Con qué criterio la biblioteca reparte la CPU ENTRE sus hilos
+        // ULT listos — configurable con "Manejada por la biblioteca" Y con
+        // "Jacketing" (ambas consultan a la biblioteca; solo difieren en
+        // si una E/S bloquea al grupo o no — ver bloqueaGrupo arriba). Con
+        // "so" no hay nada que configurar: la biblioteca solo se llama para
+        // crear y terminar hilos, con un orden simple (planificacionInterna
+        // = null, ver elegirMejorMiembroListo) — y cuando un hilo vuelve de
+        // una E/S, retoma él mismo directo, sin pasar por la biblioteca en
+        // absoluto (ver miembroBloqueanteQueVolvio en resolverRetornosDeIOCompuestos).
+        planificacionInterna:
+          u.proceso.algoritmoBiblioteca === "biblioteca" || u.proceso.algoritmoBiblioteca === "jacketing"
+            ? u.proceso.planificacionBiblioteca || { algoritmo: "fifo", quantum: 2 }
+            : null,
+        quantumInternoRestante: null,
+        contadorEncoladoInterno: 0,
         miembros,
         miembroActivoId: activo.id,
         rafagas: activo.rafagas,
@@ -284,15 +319,18 @@ const SimuladorCore = (function () {
 
   /**
    * Dentro de una unidad compuesta (grupo de hilos ULT), elige el próximo
-   * miembro LISTO por round robin simple, empezando después del que estaba
-   * activo — o null si ninguno lo está. No es una política real de
-   * scheduling de las que enseña la cátedra (esa decisión es 100% interna
-   * de la biblioteca ULT, invisible para el SO), así que un orden simple
-   * alcanza.
+   * miembro LISTO por round robin simple — o null si ninguno lo está. Es
+   * el criterio de repuesto para "so" (que no tiene un algoritmo interno
+   * elegible: la biblioteca solo se llama para crear o terminar un hilo,
+   * sin más criterio — ver elegirMejorMiembroListo), y por eso mismo uno
+   * simple alcanza. Si el que ya estaba marcado como activo sigue listo
+   * (ej. varios miembros arriban juntos y ESE ya lo estaba), se queda con
+   * él; si no, avanza cíclicamente desde su posición.
    */
-  function elegirSiguienteMiembroListo(estadoCompuesto) {
+  function elegirSiguienteMiembroListoRoundRobinSimple(estadoCompuesto) {
     const miembros = estadoCompuesto.miembros;
     const indiceActual = miembros.findIndex((m) => m.id === estadoCompuesto.miembroActivoId);
+    if (indiceActual >= 0 && miembros[indiceActual].estado === "listo") return miembros[indiceActual];
     for (let paso = 1; paso <= miembros.length; paso++) {
       const candidato = miembros[(indiceActual + paso) % miembros.length];
       if (candidato.estado === "listo") return candidato;
@@ -300,10 +338,144 @@ const SimuladorCore = (function () {
     return null;
   }
 
+  /** Cuánto le queda a un miembro de su ráfaga de CPU actual. */
+  function restanteMiembro(miembro) {
+    return miembro.rafagas[miembro.indiceRafaga].restante;
+  }
+
+  /**
+   * Desempate por orden de llegada ENTRE MIEMBROS de una misma unidad
+   * compuesta — lo usan FIFO y Round Robin (ver elegirMejorMiembroListo)
+   * como criterio principal, y SJF/SRTF como desempate cuando dos miembros
+   * tienen el mismo restante. Análogo a instanteEntradaAListos/ordenEncolado
+   * de una unidad, pero interno a esta biblioteca (ver marcarMiembroListoInterno).
+   */
+  function compararOrdenLlegadaMiembro(a, b) {
+    const diff = (a.instanteEntradaAListos || 0) - (b.instanteEntradaAListos || 0);
+    if (diff !== 0) return diff;
+    return (a.ordenEncoladoInterno || 0) - (b.ordenEncoladoInterno || 0);
+  }
+
+  /**
+   * Marca un miembro como "listo" DENTRO de la biblioteca — análogo a
+   * marcarListo de una unidad (motor externo), pero llevando la cuenta
+   * interna (instanteEntradaAListos/ordenEncoladoInterno) que usan FIFO,
+   * SJF, SRTF y Round Robin como desempate entre miembros. Se llama en los
+   * 4 momentos en que un miembro puede pasar a estar listo: arribo, retorno
+   * de una E/S, y — para los algoritmos internos expropiativos/con quantum
+   * — al ser desalojado por otro miembro (ver
+   * resolverPreempcionInternaCompuesta / resolverQuantumInternoCompuesta).
+   */
+  function marcarMiembroListoInterno(estadoCompuesto, miembro, instante) {
+    miembro.instanteEntradaAListos = instante;
+    miembro.ordenEncoladoInterno = estadoCompuesto.contadorEncoladoInterno++;
+  }
+
+  /**
+   * Elige, de entre los miembros LISTOS de una unidad compuesta, cuál
+   * corresponde activar según el algoritmo interno de su biblioteca (ver
+   * editor-procesos.js/crearSelectorPlanificacionBiblioteca) — es la MISMA
+   * decisión que toma el algoritmo elegido en "Ver algoritmos" para los
+   * procesos, un nivel más abajo: el SO ve un único proceso (por eso hay un
+   * algoritmo "de afuera"), y adentro la biblioteca reparte sus hilos ULT
+   * con este otro algoritmo, "de adentro".
+   *
+   *   - "fifo" / "round-robin": el que espera hace más tiempo (Round Robin
+   *     no tiene un criterio de ORDEN propio — la diferencia con FIFO es
+   *     que además fuerza cambios por quantum interno, ver
+   *     resolverQuantumInternoCompuesta).
+   *   - "sjf" / "srtf": el de menor ráfaga (restante) real.
+   *
+   * Sin planificación interna configurada (biblioteca "so", que no tiene
+   * este nivel de detalle), cae al round robin simple de siempre.
+   */
+  function elegirMejorMiembroListo(estadoCompuesto) {
+    const planificacion = estadoCompuesto.planificacionInterna;
+    if (!planificacion) return elegirSiguienteMiembroListoRoundRobinSimple(estadoCompuesto);
+
+    const candidatos = estadoCompuesto.miembros.filter((m) => m.estado === "listo");
+    if (candidatos.length === 0) return null;
+
+    if (planificacion.algoritmo === "sjf" || planificacion.algoritmo === "srtf") {
+      candidatos.sort((a, b) => restanteMiembro(a) - restanteMiembro(b) || compararOrdenLlegadaMiembro(a, b));
+    } else {
+      candidatos.sort(compararOrdenLlegadaMiembro);
+    }
+    return candidatos[0];
+  }
+
   function activarMiembro(estadoCompuesto, miembro) {
     estadoCompuesto.miembroActivoId = miembro.id;
     estadoCompuesto.rafagas = miembro.rafagas;
     estadoCompuesto.indiceRafaga = miembro.indiceRafaga;
+    // Cada vez que arranca a correr un miembro (sea porque otro terminó,
+    // volvió de una E/S, arribó, o lo desalojó otro) empieza con el
+    // quantum INTERNO fresco — solo importa si la biblioteca usa Round
+    // Robin (ver resolverQuantumInternoCompuesta), que lo reinicializa solo
+    // cuando lo encuentra en null.
+    estadoCompuesto.quantumInternoRestante = null;
+  }
+
+  /**
+   * Solo para biblioteca "srtf": si en ESTE tick hay un miembro listo (que
+   * no sea el activo) con MENOS restante que el activo, lo desaloja de
+   * inmediato — invisible para el SO (no toca `procesoEjecutando` ni el
+   * quantum externo, ver simularPorInstantes/round-robin-virtual.js, que
+   * llaman a esto ANTES de descontarle la unidad de tiempo al activo, para
+   * decidir a quién le toca ESTE tick). El miembro desalojado vuelve a
+   * quedar "listo" (se reencola con instanteEntradaAListos actualizado,
+   * como cualquier otro reingreso interno).
+   */
+  function resolverPreempcionInternaCompuesta(estadoCompuesto, instante) {
+    const planificacion = estadoCompuesto.planificacionInterna;
+    if (!planificacion || planificacion.algoritmo !== "srtf") return;
+
+    const activo = estadoCompuesto.miembros.find((m) => m.id === estadoCompuesto.miembroActivoId);
+    const otrosListos = estadoCompuesto.miembros.filter((m) => m.estado === "listo" && m.id !== activo.id);
+    if (otrosListos.length === 0) return;
+
+    otrosListos.sort((a, b) => restanteMiembro(a) - restanteMiembro(b) || compararOrdenLlegadaMiembro(a, b));
+    const mejor = otrosListos[0];
+    if (restanteMiembro(mejor) < restanteMiembro(activo)) {
+      marcarMiembroListoInterno(estadoCompuesto, activo, instante);
+      activarMiembro(estadoCompuesto, mejor);
+    }
+  }
+
+  /**
+   * Solo para biblioteca "round-robin": descuenta el quantum INTERNO del
+   * miembro activo por este tick y, si se agota Y su ráfaga NO terminó
+   * también en este mismo tick (eso ya lo resuelve, por su cuenta,
+   * resolverFinRafagaCompuesta), lo desaloja y activa al siguiente miembro
+   * listo en orden de llegada — invisible para el SO, igual que la
+   * expropiación de SRTF. Si no queda nadie más listo, sigue el mismo con
+   * un quantum interno fresco (no tiene sentido "desalojarlo" para
+   * dárselo de nuevo a él mismo).
+   *
+   * Se llama DESPUÉS de descontarle la unidad de tiempo al activo (para
+   * saber si esta ráfaga terminó justo ahora), en el mismo punto donde el
+   * motor que llama resuelve sus propias transiciones.
+   */
+  function resolverQuantumInternoCompuesta(estadoCompuesto, terminoRafagaEsteTick, instante) {
+    const planificacion = estadoCompuesto.planificacionInterna;
+    if (!planificacion || planificacion.algoritmo !== "round-robin") return;
+    if (terminoRafagaEsteTick) return;
+
+    if (estadoCompuesto.quantumInternoRestante == null) estadoCompuesto.quantumInternoRestante = planificacion.quantum;
+    estadoCompuesto.quantumInternoRestante -= 1;
+    if (estadoCompuesto.quantumInternoRestante > 0) return;
+
+    const activo = estadoCompuesto.miembros.find((m) => m.id === estadoCompuesto.miembroActivoId);
+    const otrosListos = estadoCompuesto.miembros.filter((m) => m.estado === "listo" && m.id !== activo.id);
+    if (otrosListos.length === 0) {
+      // Nadie más para darle el turno: sigue el mismo, con quantum fresco.
+      estadoCompuesto.quantumInternoRestante = planificacion.quantum;
+      return;
+    }
+
+    otrosListos.sort(compararOrdenLlegadaMiembro);
+    marcarMiembroListoInterno(estadoCompuesto, activo, instante);
+    activarMiembro(estadoCompuesto, otrosListos[0]);
   }
 
   /**
@@ -340,18 +512,18 @@ const SimuladorCore = (function () {
       miembro.instanteFinIO = fin;
       franjasIO.push({ proceso: miembro.id, inicio, fin, dispositivo: nombreDispositivo });
 
-      // Biblioteca "manejada por el SO": esta E/S puntual bloquea a TODO
-      // el grupo, sin importar si algún otro miembro está listo — el SO no
-      // sabe que hay más hilos, así que no le da la CPU al proceso hasta
-      // que ESTA E/S puntual termine (ver resolverRetornosDeIOCompuestos,
-      // que respeta `miembroBloqueanteId`).
+      // Biblioteca "manejada por el SO" o "por la biblioteca" (bloqueaGrupo):
+      // esta E/S puntual bloquea a TODO el grupo, sin importar si algún
+      // otro miembro está listo — el SO no sabe que hay más hilos, así que
+      // no le da la CPU al proceso hasta que ESTA E/S puntual termine (ver
+      // resolverRetornosDeIOCompuestos, que respeta `miembroBloqueanteId`).
       if (estadoCompuesto.bloqueaGrupo) {
         estadoCompuesto.miembroBloqueanteId = miembro.id;
         return "vacia";
       }
     }
 
-    const siguienteActivo = elegirSiguienteMiembroListo(estadoCompuesto);
+    const siguienteActivo = elegirMejorMiembroListo(estadoCompuesto);
     if (siguienteActivo) {
       activarMiembro(estadoCompuesto, siguienteActivo);
       return "sigue";
@@ -395,6 +567,7 @@ const SimuladorCore = (function () {
     estadoCompuesto.miembros.forEach((m) => {
       if (m.estado === "no-llegado" && m.arribo === instante) {
         m.estado = "listo";
+        marcarMiembroListoInterno(estadoCompuesto, m, instante);
         alguienLlego = true;
       }
     });
@@ -402,15 +575,14 @@ const SimuladorCore = (function () {
 
     if (estadoCompuesto.estado === "listo" || estadoCompuesto.estado === "ejecutando" || estadoCompuesto.estado === "terminado") return;
 
-    // Biblioteca "manejada por el SO": si el grupo está bloqueado
-    // esperando a un miembro puntual, el arribo de UN HILO NUEVO no lo
-    // despierta — para el SO, el proceso entero sigue en E/S hasta que
+    // Biblioteca "manejada por el SO" o "por la biblioteca" (bloqueaGrupo):
+    // si el grupo está bloqueado esperando a un miembro puntual, el
+    // arribo de UN HILO NUEVO no lo despierta — para el SO, el proceso
+    // entero sigue en E/S hasta que
     // vuelva justo ese miembro (ver resolverFinRafagaCompuesta).
     if (estadoCompuesto.bloqueaGrupo && estadoCompuesto.miembroBloqueanteId != null) return;
 
-    const activo = estadoCompuesto.miembros.find((m) => m.id === estadoCompuesto.miembroActivoId);
-    const miembroParaActivar = activo && activo.estado === "listo" ? activo : estadoCompuesto.miembros.find((m) => m.estado === "listo");
-    activarMiembro(estadoCompuesto, miembroParaActivar);
+    activarMiembro(estadoCompuesto, elegirMejorMiembroListo(estadoCompuesto));
     marcarListo(estadoCompuesto, "arribo");
   }
 
@@ -440,6 +612,7 @@ const SimuladorCore = (function () {
 
       let alguienQuedoListo = false;
       let elBloqueanteVolvio = false;
+      let miembroBloqueanteQueVolvio = null;
       e.miembros.forEach((m) => {
         if (m.estado === "io" && m.instanteFinIO === instante) {
           m.indiceRafaga += 1;
@@ -447,8 +620,12 @@ const SimuladorCore = (function () {
             m.estado = "terminado";
           } else {
             m.estado = "listo";
+            marcarMiembroListoInterno(e, m, instante);
             alguienQuedoListo = true;
-            if (m.id === e.miembroBloqueanteId) elBloqueanteVolvio = true;
+            if (m.id === e.miembroBloqueanteId) {
+              elBloqueanteVolvio = true;
+              miembroBloqueanteQueVolvio = m;
+            }
           }
         }
       });
@@ -462,23 +639,39 @@ const SimuladorCore = (function () {
         return;
       }
 
-      // Biblioteca "manejada por el SO": aunque algún otro miembro se haya
-      // puesto "listo" recién, el grupo sigue bloqueado hasta que vuelva
-      // JUSTO el miembro cuya E/S tiene ocupado al SO.
+      // Biblioteca "manejada por el SO" o "por la biblioteca" (bloqueaGrupo):
+      // aunque algún otro miembro se haya puesto "listo" recién, el grupo
+      // sigue bloqueado hasta que vuelva JUSTO el miembro cuya E/S tiene
+      // ocupado al SO.
       if (e.bloqueaGrupo && e.miembroBloqueanteId != null && !elBloqueanteVolvio) return;
 
-      // OJO: hay que llamar a activarMiembro SIEMPRE acá, incluso si el
-      // miembro que quedó listo es el mismo que ya estaba marcado como
-      // activo — es lo que resincroniza `rafagas`/`indiceRafaga` de la
-      // unidad compuesta con el `indiceRafaga` que el miembro acaba de
-      // avanzar (arriba); si se lo saltea en ese caso, `indiceRafaga`
-      // queda apuntando a la ráfaga de CPU ya terminada (no a la
-      // siguiente), y como su `restante` ya está en 0, la unidad nunca
-      // vuelve a detectar "fin de ráfaga" — bucle infinito.
       e.miembroBloqueanteId = null;
-      const activo = e.miembros.find((m) => m.id === e.miembroActivoId);
-      const miembroParaActivar = activo && activo.estado === "listo" ? activo : e.miembros.find((m) => m.estado === "listo");
-      activarMiembro(e, miembroParaActivar);
+
+      // Si quien volvió es JUSTO el miembro cuya E/S tenía bloqueado a todo
+      // el grupo, retoma él mismo directamente — como si el SO le devolviera
+      // el control a la llamada bloqueante que acaba de terminar (que es
+      // literalmente lo que pasó). NO se vuelve a evaluar el algoritmo
+      // interno acá: aunque algún otro hilo lleve esperando más tiempo, la
+      // biblioteca recién tiene la oportunidad de decidir de nuevo en el
+      // PRÓXIMO tick (ver resolverPreempcionInternaCompuesta para SRTF, que
+      // sí lo desalojaría ahí mismo si corresponde) — no en el instante
+      // exacto en que la E/S termina.
+      //
+      // Si en cambio no hay un miembro bloqueante puntual (grupo que no
+      // estaba bloqueado por nadie en particular — hoy no pasa, porque
+      // bloqueaGrupo es siempre true, pero queda listo para cuando
+      // Jacketing exista de verdad y varios miembros puedan estar en E/S
+      // en paralelo), sí corresponde que decida el algoritmo interno.
+      //
+      // OJO: hay que llamar a activarMiembro SIEMPRE acá (en cualquiera de
+      // los dos casos), incluso si el miembro elegido es el mismo que ya
+      // estaba marcado como activo — es lo que resincroniza
+      // `rafagas`/`indiceRafaga` de la unidad compuesta con el
+      // `indiceRafaga` que el miembro acaba de avanzar (arriba); si se lo
+      // saltea, `indiceRafaga` queda apuntando a la ráfaga de CPU ya
+      // terminada (no a la siguiente), y como su `restante` ya está en 0,
+      // la unidad nunca vuelve a detectar "fin de ráfaga" — bucle infinito.
+      activarMiembro(e, miembroBloqueanteQueVolvio || elegirMejorMiembroListo(e));
       marcarListo(e, motivoDeRetorno(e));
     });
   }
@@ -617,6 +810,16 @@ const SimuladorCore = (function () {
         }
       }
 
+      // 2.1) Planificación INTERNA de una unidad compuesta (biblioteca ULT
+      //      "biblioteca" con algoritmo "srtf"): esta expropiación es
+      //      invisible para el SO, así que se resuelve aparte, DESPUÉS de
+      //      que el SO ya decidió a quién le da la CPU (arriba) pero ANTES
+      //      de ejecutar el tick — decide, de entre los hilos ULT del
+      //      proceso elegido, cuál de ellos es el que realmente ejecuta.
+      if (procesoEjecutando && procesoEjecutando.esCompuesta) {
+        resolverPreempcionInternaCompuesta(procesoEjecutando, instante);
+      }
+
       // 3) Registrar la cola de listos de este instante para la UI. El
       //    proceso que está ejecutando (o en IO) nunca aparece acá — esto es
       //    específicamente la cola de ESPERA, no "quién está siendo
@@ -639,6 +842,18 @@ const SimuladorCore = (function () {
       //    desempate con los arribos que sí se miden en el instante real.
       let transicion = null; // 'fin-rafaga' | 'fin-quantum' | null
       let duracionRafagaQueTermino = null;
+      let terminoRafagaEsteTick = false;
+      // Caso borde SOLO relevante para unidades compuestas: la ráfaga del
+      // miembro activo terminó justo en el mismo tick en que también se
+      // agotó el quantum EXTERNO (del algoritmo elegido en "Ver
+      // algoritmos", que planifica al PROCESO entero, no a cada hilo). Si
+      // la biblioteca tiene otro hilo listo para seguir ("sigue" en
+      // resolverFinRafagaCompuesta más abajo), el cambio de hilo es
+      // invisible para el SO — pero el SO YA le agotó su turno al proceso,
+      // así que igual hay que devolverle la CPU (a otro proceso, o a un
+      // hilo KLT que esté esperando, tratado como un proceso más) antes de
+      // que la biblioteca retome con su hilo siguiente.
+      let agotoQuantumJustoAlTerminarRafaga = false;
 
       if (procesoEjecutando) {
         const e = procesoEjecutando;
@@ -655,10 +870,11 @@ const SimuladorCore = (function () {
           infoEjecucionPorInstante[instante][idEjecutable(e)] = capturarInfoEjecucion(e, instante);
         }
 
-        const terminoRafaga = rafagaActual.restante === 0;
-        const agotoQuantum = quantum !== null && !terminoRafaga && e.quantumRestante === 0;
+        terminoRafagaEsteTick = rafagaActual.restante === 0;
+        const agotoQuantum = quantum !== null && !terminoRafagaEsteTick && e.quantumRestante === 0;
+        agotoQuantumJustoAlTerminarRafaga = quantum !== null && terminoRafagaEsteTick && e.quantumRestante === 0;
 
-        if (terminoRafaga) {
+        if (terminoRafagaEsteTick) {
           transicion = "fin-rafaga";
           duracionRafagaQueTermino = rafagaActual.duracion;
         } else if (agotoQuantum) {
@@ -675,6 +891,19 @@ const SimuladorCore = (function () {
 
       instante += 1;
 
+      // 5.1) Planificación INTERNA de una unidad compuesta (biblioteca ULT
+      //      "biblioteca" con algoritmo "round-robin"): descuenta el
+      //      quantum interno del miembro que acaba de ejecutar y, si se
+      //      agotó (y su ráfaga no terminó también en este mismo tick, ver
+      //      `transicion === "fin-rafaga"`), lo desaloja de sus hermanos.
+      //      Invisible para el SO: no toca `procesoEjecutando`, así que no
+      //      importa si después, más abajo, el SO igual lo desaloja por
+      //      SU PROPIO quantum ("fin-quantum") — la biblioteca ya habrá
+      //      rotado a su siguiente hilo para la próxima vez que le toque.
+      if (procesoEjecutando && procesoEjecutando.esCompuesta) {
+        resolverQuantumInternoCompuesta(procesoEjecutando, terminoRafagaEsteTick, instante);
+      }
+
       // 6) Resolver, ya en el nuevo instante, la transición del proceso que ocupó la CPU.
       if (transicion === "fin-rafaga") {
         const e = procesoEjecutando;
@@ -684,7 +913,17 @@ const SimuladorCore = (function () {
           // pasa por el planificador ni resetea el quantum) — solo si NO
           // queda ninguno listo, la unidad compuesta le devuelve la CPU al SO.
           const resultado = resolverFinRafagaCompuesta(e, dispositivoIO, instante, franjasIO, actualizarEstimacion, duracionRafagaQueTermino);
-          if (resultado !== "sigue") {
+          if (resultado === "sigue" && agotoQuantumJustoAlTerminarRafaga) {
+            // Otro hilo de la biblioteca sigue listo (el cambio en sí es
+            // invisible para el SO), PERO el quantum del proceso, como un
+            // todo, se agotó justo en este mismo tick — así que el SO le
+            // devuelve la CPU igual, como si hubiera sido un fin de
+            // quantum normal. La próxima vez que le toque el turno,
+            // retoma con el hilo que "sigue" ya dejó activo.
+            marcarListo(e, "desalojado");
+            e.quantumRestante = null;
+            procesoEjecutando = null;
+          } else if (resultado !== "sigue") {
             if (resultado === "terminada") {
               e.estado = "terminado";
               e.instanteTerminacion = instante;
@@ -782,6 +1021,8 @@ const SimuladorCore = (function () {
     resolverFinRafagaCompuesta,
     resolverArriboDeCompuesta,
     resolverRetornosDeIOCompuestos,
+    resolverPreempcionInternaCompuesta,
+    resolverQuantumInternoCompuesta,
     consolidarGantt,
     calcularMetricas,
     simularPorInstantes,

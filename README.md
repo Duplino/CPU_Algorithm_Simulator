@@ -28,9 +28,10 @@ SJF, SRTF y HRRN soportan además un toggle de "estimaciones" (con reestimación
 Cada proceso tiene uno o más hilos (nombrados "1", "2", ... dentro de cada proceso — ningún hilo tiene trato especial), cada uno con su propia ráfaga y arribo. Un hilo puede ser:
 
 - **KLT**: unidad de planificación independiente, compite por la CPU como si fuera un proceso más.
-- **ULT**: comparte con los demás hilos ULT de su mismo proceso una única unidad visible para el sistema operativo, que decide internamente (round robin simple) cuál ejecuta. Cómo se manejan sus llamadas bloqueantes de E/S es configurable por proceso:
-  - **Manejada por el SO**: sin manejo especial — la E/S de cualquier hilo ULT bloquea a TODO el grupo hasta que esa E/S puntual termina.
-  - **Manejada por la biblioteca** o **Jacketing**: un hilo en E/S no bloquea a sus hermanos (mismo resultado simulado, mecanismos distintos).
+- **ULT**: comparte con los demás hilos ULT de su mismo proceso una única unidad visible para el sistema operativo — el algoritmo elegido en "Ver algoritmos" planifica al proceso entero, no a cada hilo por separado. Cómo se manejan sus llamadas bloqueantes de E/S es configurable por proceso:
+  - **Manejada por el SO**: sin manejo especial — la E/S de cualquier hilo ULT bloquea a TODO el grupo hasta que esa E/S puntual termina, y ahí retoma el MISMO hilo que se había ido (la biblioteca no interviene en ese vaivén; solo se la llama para crear o terminar un hilo, con un orden simple).
+  - **Manejada por la biblioteca**: mismo bloqueo que "Manejada por el SO" (la llamada también le llega tal cual al SO), pero acá la biblioteca sí decide, con su propio algoritmo (FIFO, SJF, SRTF o Round Robin, cada uno con la ráfaga real — sin estimaciones), a cuál de sus hilos ULT listos le da la CPU cada vez que le toca elegir. Es, para esos hilos, la misma decisión que toma el algoritmo elegido en "Ver algoritmos" para los procesos, un nivel más abajo: el SO ve un único proceso (de ahí el algoritmo "de afuera"), y adentro la biblioteca reparte sus hilos con este otro algoritmo, "de adentro".
+  - **Jacketing**: intercepta la llamada de E/S y la vuelve no bloqueante — cuando un hilo pide E/S, el grupo NO se bloquea: sigue corriendo de inmediato con el siguiente hilo que elija la biblioteca (mismo algoritmo configurable que "Manejada por la biblioteca").
 
 ### Importar / exportar
 
