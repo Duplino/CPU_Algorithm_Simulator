@@ -50,14 +50,6 @@ Para compartir un link que abra la app ya armada (ej. desde un campus virtual), 
 
 Ejemplo: `?procesos=https://ejemplo.com/mi-ejercicio.json&solucion=https://ejemplo.com/mi-solucion.json&algoritmos=fifo,srtf`.
 
-### Ejemplos
-
-La carpeta [`ejemplos/`](ejemplos/) tiene ejercicios pensados para importar y comparar dos algoritmos lado a lado (agregando dos tarjetas en "Ver algoritmos"):
-
-- [`round-robin-vs-rrv_quantum-2.json`](ejemplos/round-robin-vs-rrv_quantum-2.json) — Round Robin vs. Round Robin Virtual con quantum 2: muestra cómo el quantum sobrante al volver de una E/S cambia el resultado.
-- [`sjf-vs-srtf.json`](ejemplos/sjf-vs-srtf.json) — SJF vs. SRTF: un proceso corto que llega después desaloja al que está corriendo solo en SRTF.
-- [`prioridad-vs-prioridad-expropiativa.json`](ejemplos/prioridad-vs-prioridad-expropiativa.json) — mismo caso, pero con prioridades.
-- [`hilos-klt-vs-ult-so.json`](ejemplos/hilos-klt-vs-ult-so.json) — un hilo KLT independiente vs. un grupo ULT bloqueado por el SO durante una E/S.
 
 ## Uso local
 
